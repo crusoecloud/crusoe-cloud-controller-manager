@@ -57,7 +57,9 @@ func getIBNetwork(ctx context.Context, client *crusoeapi.APIClient,
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances: %w", err)
 	}
-	defer response.Body.Close()
+	if response != nil {
+		defer response.Body.Close()
+	}
 	klog.Infof("getIBNetwork: %v", ibPartition)
 
 	return &ibPartition, nil
@@ -76,7 +78,9 @@ func getInstanceByID(ctx context.Context, client *crusoeapi.APIClient,
 	if err != nil {
 		return nil, response, fmt.Errorf("failed to list instances: %w", err)
 	}
-	defer response.Body.Close()
+	if response != nil {
+		defer response.Body.Close()
+	}
 	klog.Infof("getInstanceByID: %v", instance)
 
 	return &instance, response, nil

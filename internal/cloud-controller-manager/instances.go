@@ -190,15 +190,15 @@ func (c *Instances) InstanceMetadata(ctx context.Context,
 			return nil, err
 		}
 		if ibPartition != nil {
-			additionalLabels["crusoe.ib.partition.name"] = ibPartition.Name
-			additionalLabels["crusoe.ib.partition.id"] = ibPartition.Id
-			additionalLabels["crusoe.ib.partition.networkId"] = ibPartition.IbNetworkId
+			additionalLabels["crusoe.ai/ib.partition.name"] = ibPartition.Name
+			additionalLabels["crusoe.ai/ib.partition.id"] = ibPartition.Id
+			additionalLabels["crusoe.ai/ib.partition.networkId"] = ibPartition.IbNetworkId
 		}
 	}
-	additionalLabels["crusoe.instance.id"] = currInstance.Id
-	additionalLabels["crusoe.instance.group.id"] = currInstance.InstanceGroupId
-	additionalLabels["crusoe.instance.template.id"] = currInstance.InstanceTemplateId
-	additionalLabels["crusoe.instance.state"] = currInstance.State
+	additionalLabels["crusoe.ai/instance.id"] = currInstance.Id
+	additionalLabels["crusoe.ai/instance.group.id"] = currInstance.InstanceGroupId
+	additionalLabels["crusoe.ai/instance.template.id"] = currInstance.InstanceTemplateId
+	additionalLabels["crusoe.ai/instance.state"] = currInstance.State
 	metadata := cloudprovider.InstanceMetadata{
 		ProviderID:       ProviderPrefix + currInstance.Id,
 		InstanceType:     currInstance.Type_,

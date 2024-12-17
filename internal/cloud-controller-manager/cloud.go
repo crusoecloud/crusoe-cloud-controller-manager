@@ -50,7 +50,7 @@ func (c *Cloud) Zones() (cloudprovider.Zones, bool) {
 func (c *Cloud) ProviderName() string { return ProviderName }
 
 func (c *Cloud) HasClusterID() bool {
-	return false
+	return true
 }
 
 func RegisterCloudProvider() {
@@ -63,7 +63,6 @@ func newCloud() (cloudprovider.Interface, error) {
 	apiEndPoint := os.Getenv(APIEndpoint)
 	apiAccessKey := os.Getenv(AccessKey)
 	apiSecretKey := os.Getenv(SecretKey)
-	klog.Infof("apiEndPoint(%v), apiAccessKey(%v), apiSecretKey(%v)", apiEndPoint, apiAccessKey, apiSecretKey)
 	cc := NewCrusoeClient(apiEndPoint, apiAccessKey, apiSecretKey,
 		"crusoe-cloud-controller-manager/0.0.1")
 
