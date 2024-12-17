@@ -1,0 +1,29 @@
+include:
+  - project: 'crusoeenergy/tools'
+    file: '/templates/go.gitlab-ci.yml'
+  - 'versions.yml'
+
+variables:
+  RELEASE_IMAGE: ${CI_REGISTRY_IMAGE}/crusoe-cloud-controller-manager
+  CI_IMAGE: registry.gitlab.com/crusoeenergy/tools/go-ci-1.22
+.code-changes: &code-changes
+  changes:
+    - .gitlab-ci.yml
+    - Dockerfile
+    - Makefile
+    - cmd/**/*
+    - go.*
+    - internal/**/*
+    - scripts/**/*
+
+code_intelligence:
+  rules:
+    - when: never
+
+build_and_push:
+  before_script:
+    - docker login -u $CI_DEPENDENCY_PROXY_USER -p $CI_DEPENDENCY_PROXY_PASSWORD $CI_DEPENDENCY_PROXY_SERVER
+
+container_scanning:
+  variables:
+    CS_IMAGE: $RELEASE_IMAGE:$CI_COMMIT_REF_NAME
