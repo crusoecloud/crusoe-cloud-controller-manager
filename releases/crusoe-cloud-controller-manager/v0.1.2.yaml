@@ -56,13 +56,13 @@ spec:
               topologyKey: "kubernetes.io/hostname"
       containers:
         - name: crusoe-cloud-controller-manager
-          image: crusoe-cloud-controller-manager:0.23
+          image: crusoe-cloud-controller-manager:{{ ccm_version }}
           imagePullPolicy: Never
           command:
             - "/bin/crusoe-cloud-controller-manager"
             - "--leader-elect=true"
             - "--cloud-provider=crusoe"
-            - "--cluster-name=sriprod1"
+            - "--cluster-name={{ cluster_name }}"
             - "--use-service-account-credentials"
           resources:
             requests:
