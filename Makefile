@@ -1,7 +1,7 @@
 PREFIX?=$(shell pwd)
 
 NAME := crusoe-cloud-controller-manager
-PKG := github.com/crusoecloud/crusoe-cloud-controller-manager/cmd
+PKG := gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/cmd
 
 BUILDDIR := ${PREFIX}/dist
 # Set any default go build tags
