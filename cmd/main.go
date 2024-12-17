@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	cloudcontrollermanager "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/cloud-controller-manager"
 	"k8s.io/apimachinery/pkg/util/wait"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/cloud-provider/app"
@@ -15,6 +14,8 @@ import (
 	_ "k8s.io/component-base/metrics/prometheus/clientgo"
 	_ "k8s.io/component-base/metrics/prometheus/version"
 	"k8s.io/klog/v2"
+
+	cloudcontrollermanager "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/cloud-controller-manager"
 )
 
 const ProviderName = "crusoe"
