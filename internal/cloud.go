@@ -7,9 +7,9 @@ import (
 	"k8s.io/client-go/informers"
 	cloudprovider "k8s.io/cloud-provider"
 
-	auth "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/auth"
-	client "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/client"
-	instances "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/instances"
+	auth "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/auth"
+	client "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
+	instances "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/instances"
 )
 
 const (

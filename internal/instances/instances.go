@@ -13,7 +13,7 @@ import (
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/klog/v2"
 
-	"gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/client"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 )
 
 const (

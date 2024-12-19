@@ -1,4 +1,4 @@
-module gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager
+module github.com/crusoecloud/crusoe-cloud-controller-manager
 
 go 1.22.0
 
