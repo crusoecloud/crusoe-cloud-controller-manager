@@ -6,14 +6,13 @@ import (
 	"testing"
 
 	v1alpha5 "github.com/crusoecloud/client-go/swagger/v1alpha5"
+	mock_client "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client/mock"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/instances"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-
-	mock_client "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client/mock"
-	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/instances"
 )
 
 const (

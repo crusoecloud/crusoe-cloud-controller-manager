@@ -8,12 +8,11 @@ import (
 	"time"
 
 	crusoeapi "github.com/crusoecloud/client-go/swagger/v1alpha5"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/klog/v2"
-
-	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 )
 
 const (

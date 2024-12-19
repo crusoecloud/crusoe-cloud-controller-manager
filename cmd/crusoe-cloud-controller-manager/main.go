@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	cloudcontrollermanager "github.com/crusoecloud/crusoe-cloud-controller-manager/internal"
 	"k8s.io/apimachinery/pkg/util/wait"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/cloud-provider/app"
@@ -14,8 +15,6 @@ import (
 	_ "k8s.io/component-base/metrics/prometheus/clientgo"
 	_ "k8s.io/component-base/metrics/prometheus/version"
 	"k8s.io/klog/v2"
-
-	cloudcontrollermanager "github.com/crusoecloud/crusoe-cloud-controller-manager/internal"
 )
 
 const ProviderName = "crusoe"

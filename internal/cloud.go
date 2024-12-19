@@ -4,12 +4,11 @@ import (
 	"io"
 	"os"
 
-	"k8s.io/client-go/informers"
-	cloudprovider "k8s.io/cloud-provider"
-
 	auth "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/auth"
 	client "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	instances "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/instances"
+	"k8s.io/client-go/informers"
+	cloudprovider "k8s.io/cloud-provider"
 )
 
 const (
