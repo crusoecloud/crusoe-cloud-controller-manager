@@ -58,7 +58,7 @@ spec:
               topologyKey: "kubernetes.io/hostname"
       containers:
         - name: crusoe-cloud-controller-manager
-          image:  crusoe-cloud-controller-manager:0.26
+          image:  ghcr.io/crusoecloud/crusoe-cloud-controller-manager:v0.1.0
           imagePullPolicy: IfNotPresent
           command:
             - "/bin/crusoe-cloud-controller-manager"

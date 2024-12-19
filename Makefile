@@ -1,7 +1,7 @@
 PREFIX?=$(shell pwd)
 
 NAME := crusoe-cloud-controller-manager
-PKG := gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/cmd/crusoe-cloud-controller-manager
+PKG := github.com/crusoecloud/crusoe-cloud-controller-manager/cmd/$(NAME)
 
 BUILDDIR := ${PREFIX}/dist
 # Set any default go build tags
@@ -14,6 +14,8 @@ GOCOVER_VERSION = latest
 
 GOARCH=amd64
 OS := linux
+
+GO_LDFLAGS=-ldflags "-X 'github.com/crusoecloud/crusoe-cloud-controller-manager/internal/ccm.version=$$CRUSOE_CLOUD_CONTROLLER_MANAGER_VERSION' -X 'github.com/crusoecloud/crusoe-cloud-controller-manager/internal/ccm.name=$$CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME'"
 
 .PHONY: run
 run:
