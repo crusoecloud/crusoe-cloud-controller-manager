@@ -1,8 +1,9 @@
-package crusoe
+package instances
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/klog/v2"
+
+	"gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/client"
 )
 
 const (
@@ -21,83 +24,83 @@ const (
 var ErrAssertTimeTypeFailed = errors.New("failed to assert type time.Time for firstSeen")
 
 type Instances struct {
-	CrusoeClient  *crusoeapi.APIClient
 	nodeFirstSeen sync.Map
+	apiClient     client.APIClient
 }
 
-func (c *Instances) NodeAddresses(ctx context.Context, name types.NodeName) ([]v1.NodeAddress, error) {
-	currInstance, err := getInstancebyName(ctx, c.CrusoeClient, string(name))
+func (i *Instances) NodeAddresses(ctx context.Context, name types.NodeName) ([]v1.NodeAddress, error) {
+	currInstance, err := i.apiClient.GetInstanceByName(ctx, string(name))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get instance by name %s: %w", name, err)
 	}
 
 	return getNodeAddress(currInstance)
 }
 
-func (c *Instances) NodeAddressesByProviderID(ctx context.Context, providerID string) ([]v1.NodeAddress, error) {
-	currInstance, responseBody, err := getInstanceByID(ctx, c.CrusoeClient, getInstanceIDFromProviderID(providerID))
+func (i *Instances) NodeAddressesByProviderID(ctx context.Context, providerID string) ([]v1.NodeAddress, error) {
+	currInstance, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(providerID))
 	if responseBody != nil {
 		defer responseBody.Body.Close()
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get instance by provider ID %s: %w", providerID, err)
 	}
 	address, err := getNodeAddress(currInstance)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get node address for instance %s: %w", currInstance.Id, err)
 	}
 	klog.Infof("NodeAddressesByProviderID(%v) and response address %v", providerID, address)
 
 	return address, nil
 }
 
-func (c *Instances) InstanceID(ctx context.Context, nodeName types.NodeName) (string, error) {
-	currInstance, err := getInstancebyName(ctx, c.CrusoeClient, string(nodeName))
+func (i *Instances) InstanceID(ctx context.Context, nodeName types.NodeName) (string, error) {
+	currInstance, err := i.apiClient.GetInstanceByName(ctx, string(nodeName))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get instance by name %s: %w", nodeName, err)
 	}
 
 	return currInstance.Id, nil
 }
 
-func (c *Instances) InstanceType(ctx context.Context, name types.NodeName) (string, error) {
-	currInstance, err := getInstancebyName(ctx, c.CrusoeClient, string(name))
+func (i *Instances) InstanceType(ctx context.Context, name types.NodeName) (string, error) {
+	currInstance, err := i.apiClient.GetInstanceByName(ctx, string(name))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get instance by name %s: %w", name, err)
 	}
 	klog.Infof("InstanceType(%v) is %v", name, currInstance.Type_)
 
 	return currInstance.Type_, nil
 }
 
-func (c *Instances) InstanceTypeByProviderID(ctx context.Context, providerID string) (string, error) {
-	currInstance, responseBody, err := getInstanceByID(ctx, c.CrusoeClient, getInstanceIDFromProviderID(providerID))
+func (i *Instances) InstanceTypeByProviderID(ctx context.Context, providerID string) (string, error) {
+	currInstance, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(providerID))
 	if responseBody != nil {
 		defer responseBody.Body.Close()
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get instance by provider ID %s: %w", providerID, err)
 	}
 	klog.Infof("InstanceTypeByProviderID(%v) is %v", providerID, currInstance.Type_)
 
 	return currInstance.Type_, nil
 }
 
-func (c *Instances) AddSSHKeyToAllInstances(_ context.Context, _ string, _ []byte) error {
+func (i *Instances) AddSSHKeyToAllInstances(_ context.Context, _ string, _ []byte) error {
 	return cloudprovider.NotImplemented
 }
 
-func (c *Instances) CurrentNodeName(_ context.Context, hostname string) (types.NodeName, error) {
+func (i *Instances) CurrentNodeName(_ context.Context, hostname string) (types.NodeName, error) {
 	return types.NodeName(hostname), nil
 }
 
-func (c *Instances) InstanceShutdownByProviderID(ctx context.Context, providerID string) (bool, error) {
-	currInstance, responseBody, err := getInstanceByID(ctx, c.CrusoeClient, getInstanceIDFromProviderID(providerID))
+func (i *Instances) InstanceShutdownByProviderID(ctx context.Context, providerID string) (bool, error) {
+	currInstance, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(providerID))
 	if responseBody != nil {
 		defer responseBody.Body.Close()
 	}
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to get instance by provider ID %s: %w", providerID, err)
 	}
 	if currInstance == nil || currInstance.State == "STATE_SHUTOFF" || currInstance.State == "STATE_SHUTDOWN" {
 		klog.Infof("Instance (%v) is Shutdown", providerID)
@@ -108,30 +111,30 @@ func (c *Instances) InstanceShutdownByProviderID(ctx context.Context, providerID
 	return false, nil
 }
 
-func (c *Instances) InstanceShutdown(ctx context.Context, node *v1.Node) (bool, error) {
-	providerID, err := getProviderID(ctx, node, c)
+func (i *Instances) InstanceShutdown(ctx context.Context, node *v1.Node) (bool, error) {
+	providerID, err := getProviderID(ctx, node, i)
 	if err != nil {
 		return false, err
 	}
 
-	return c.InstanceShutdownByProviderID(ctx, providerID)
+	return i.InstanceShutdownByProviderID(ctx, providerID)
 }
 
-func (c *Instances) InstanceExistsByProviderID(ctx context.Context, providerID string) (bool, error) {
-	_, responseBody, err := getInstanceByID(ctx, c.CrusoeClient, getInstanceIDFromProviderID(providerID))
+func (i *Instances) InstanceExistsByProviderID(ctx context.Context, providerID string) (bool, error) {
+	_, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(providerID))
 	if responseBody != nil {
 		defer responseBody.Body.Close()
 	}
 	if err != nil && responseBody != nil && responseBody.StatusCode != 404 {
 		klog.Errorf("Error getting instance by ID: %v", err)
 
-		return false, err
+		return false, fmt.Errorf("failed to get instance by ID %s: %w", providerID, err)
 	}
 	klog.Infof("InstanceExistsAPI Response(%v)", responseBody)
 	currTime := time.Now()
-	firstSeen, ok := c.nodeFirstSeen.Load(providerID)
+	firstSeen, ok := i.nodeFirstSeen.Load(providerID)
 	if !ok {
-		c.nodeFirstSeen.Store(providerID, currTime)
+		i.nodeFirstSeen.Store(providerID, currTime)
 		firstSeen = currTime
 	}
 	firstSeenTime, ok := firstSeen.(time.Time)
@@ -150,44 +153,41 @@ func (c *Instances) InstanceExistsByProviderID(ctx context.Context, providerID s
 
 		return false, nil
 	}
-	c.nodeFirstSeen.Store(providerID, currTime)
+	i.nodeFirstSeen.Store(providerID, currTime)
 
 	return true, nil
 }
 
-func (c *Instances) InstanceExists(ctx context.Context, node *v1.Node) (bool, error) {
-	providerID, err := getProviderID(ctx, node, c)
+func (i *Instances) InstanceExists(ctx context.Context, node *v1.Node) (bool, error) {
+	providerID, err := getProviderID(ctx, node, i)
 	if err != nil {
 		return false, err
 	}
 
-	return c.InstanceExistsByProviderID(ctx, providerID)
+	return i.InstanceExistsByProviderID(ctx, providerID)
 }
 
-func (c *Instances) InstanceMetadata(ctx context.Context,
-	node *v1.Node,
-) (*cloudprovider.InstanceMetadata, error) {
+func (i *Instances) InstanceMetadata(ctx context.Context, node *v1.Node) (*cloudprovider.InstanceMetadata, error) {
 	klog.Infof("Get Instance Metadata for (%v)", node.Name)
-	currInstance, responseBody, err := getInstanceByID(ctx, c.CrusoeClient,
-		getInstanceIDFromProviderID(node.Spec.ProviderID))
+	currInstance, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(node.Spec.ProviderID))
 	if responseBody != nil {
 		defer responseBody.Body.Close()
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get instance by ID %s: %w", node.Spec.ProviderID, err)
 	}
 	klog.Infof("InstanceMetadata for (%v:%v)", node.Name, currInstance)
 	nodeAddress, err := getNodeAddress(currInstance)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get node address for instance %s: %w", currInstance.Id, err)
 	}
 	additionalLabels := make(map[string]string)
 	if len(currInstance.HostChannelAdapters) > 0 {
-		ibPartition, err := getIBNetwork(ctx, c.CrusoeClient, currInstance.ProjectId,
+		ibPartition, err := i.apiClient.GetIBNetwork(ctx, currInstance.ProjectId,
 			currInstance.HostChannelAdapters[0].IbPartitionId)
 		klog.Infof("ibPartition: %v", ibPartition)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get IB network for instance %s: %w", currInstance.Id, err)
 		}
 		if ibPartition != nil {
 			additionalLabels["crusoe.ai/ib.partition.name"] = ibPartition.Name
@@ -211,18 +211,18 @@ func (c *Instances) InstanceMetadata(ctx context.Context,
 	return &metadata, nil
 }
 
-func NewCrusoeInstances(c *crusoeapi.APIClient) *Instances {
+func NewCrusoeInstances(c client.APIClient) *Instances {
 	return &Instances{
-		CrusoeClient: c,
+		apiClient: c,
 	}
 }
 
 func getProviderID(ctx context.Context, node *v1.Node, i *Instances) (string, error) {
 	providerID := node.Spec.ProviderID
 	if providerID == "" {
-		currInstance, err := getInstancebyName(ctx, i.CrusoeClient, node.Name)
+		currInstance, err := i.apiClient.GetInstanceByName(ctx, node.Name)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("failed to get instance by Name %s: %w", node.Name, err)
 		}
 		providerID = ProviderPrefix + currInstance.Id
 	}

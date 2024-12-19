@@ -1,4 +1,4 @@
-package crusoe
+package auth
 
 import (
 	"crypto/hmac"

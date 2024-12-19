@@ -1,7 +1,7 @@
 PREFIX?=$(shell pwd)
 
 NAME := crusoe-cloud-controller-manager
-PKG := gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/cmd
+PKG := gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/cmd/crusoe-cloud-controller-manager
 
 BUILDDIR := ${PREFIX}/dist
 # Set any default go build tags
@@ -77,7 +77,7 @@ cross: ## Builds the cross compiled executable for use within a container
 .PHONY: build-linux
 build-linux:
 	@echo " $(LDFLAGS_LINUX) "
-	@CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build $(LDFLAGS_LINUX) -o ./bin/$(NAME) ./cmd/$(wildcard *.go)
+	@CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build $(LDFLAGS_LINUX) -o ./bin/$(NAME) ./cmd/crusoe-cloud-controller-manager/$(wildcard *.go)
 
 .PHONY: install
 install: ## Builds and installs the executable on PATH

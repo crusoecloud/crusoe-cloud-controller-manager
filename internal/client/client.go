@@ -1,4 +1,4 @@
-package crusoe
+package client
 
 import (
 	"context"
@@ -22,8 +22,17 @@ var (
 	ErrProjectIDNotSet  = errors.New("CRUSOE_PROJECT_ID environment variable is not set")
 )
 
-// getInstancebyName retrieves an instance by its name from the Crusoe API.
-func getInstancebyName(ctx context.Context, client *crusoeapi.APIClient, nodeName string,
+type APIClientImpl struct {
+	CrusoeAPIClient *crusoeapi.APIClient
+}
+
+type APIClient interface {
+	GetInstanceByName(ctx context.Context, nodeName string) (*crusoeapi.InstanceV1Alpha5, error)
+	GetIBNetwork(ctx context.Context, projectID, ibPartitionID string) (*crusoeapi.IbPartition, error)
+	GetInstanceByID(ctx context.Context, instanceID string) (*crusoeapi.InstanceV1Alpha5, *http.Response, error)
+}
+
+func (a *APIClientImpl) GetInstanceByName(ctx context.Context, nodeName string,
 ) (*crusoeapi.InstanceV1Alpha5, error) {
 	projectID := os.Getenv(CrusoeProjectID)
 	if projectID == "" {
@@ -34,7 +43,7 @@ func getInstancebyName(ctx context.Context, client *crusoeapi.APIClient, nodeNam
 	listVMOpts := &crusoeapi.VMsApiListInstancesOpts{
 		Names: optional.NewString(instanceName),
 	}
-	instances, instancesHTTPResp, instancesErr := client.VMsApi.ListInstances(ctx, projectID, listVMOpts)
+	instances, instancesHTTPResp, instancesErr := a.CrusoeAPIClient.VMsApi.ListInstances(ctx, projectID, listVMOpts)
 	if instancesHTTPResp != nil {
 		defer instancesHTTPResp.Body.Close()
 	}
@@ -50,10 +59,10 @@ func getInstancebyName(ctx context.Context, client *crusoeapi.APIClient, nodeNam
 	return &instances.Items[0], nil
 }
 
-func getIBNetwork(ctx context.Context, client *crusoeapi.APIClient,
+func (a *APIClientImpl) GetIBNetwork(ctx context.Context,
 	projectID, ibPartitionID string,
 ) (*crusoeapi.IbPartition, error) {
-	ibPartition, response, err := client.IBPartitionsApi.GetIBPartition(ctx, projectID, ibPartitionID)
+	ibPartition, response, err := a.CrusoeAPIClient.IBPartitionsApi.GetIBPartition(ctx, projectID, ibPartitionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances: %w", err)
 	}
@@ -65,16 +74,16 @@ func getIBNetwork(ctx context.Context, client *crusoeapi.APIClient,
 	return &ibPartition, nil
 }
 
-func getInstanceByID(ctx context.Context, client *crusoeapi.APIClient,
-	providerID string,
+func (a *APIClientImpl) GetInstanceByID(ctx context.Context,
+	instanceID string,
 ) (*crusoeapi.InstanceV1Alpha5, *http.Response, error) {
 	projectID := os.Getenv(CrusoeProjectID)
 	if projectID == "" {
 		return nil, nil, ErrProjectIDNotSet
 	}
 
-	klog.Infof("getInstanceByID: %s", providerID)
-	instance, response, err := client.VMsApi.GetInstance(ctx, projectID, providerID)
+	klog.Infof("getInstanceByID: %s", instanceID)
+	instance, response, err := a.CrusoeAPIClient.VMsApi.GetInstance(ctx, projectID, instanceID)
 	if err != nil {
 		return nil, response, fmt.Errorf("failed to list instances: %w", err)
 	}

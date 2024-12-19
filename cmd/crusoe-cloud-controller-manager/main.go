@@ -15,7 +15,7 @@ import (
 	_ "k8s.io/component-base/metrics/prometheus/version"
 	"k8s.io/klog/v2"
 
-	cloudcontrollermanager "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/cloud-controller-manager"
+	cloudcontrollermanager "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal"
 )
 
 const ProviderName = "crusoe"

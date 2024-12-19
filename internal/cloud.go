@@ -6,7 +6,10 @@ import (
 
 	"k8s.io/client-go/informers"
 	cloudprovider "k8s.io/cloud-provider"
-	"k8s.io/klog/v2"
+
+	auth "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/auth"
+	client "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/client"
+	instances "gitlab.com/crusoeenergy/island/external/crusoe-cloud-controller-manager/internal/instances"
 )
 
 const (
@@ -17,12 +20,11 @@ const (
 )
 
 type Cloud struct {
-	crusoeInstances *Instances
+	crusoeInstances *instances.Instances
 }
 
 // revive:disable:unused-parameter
 func (c *Cloud) Initialize(clientBuilder cloudprovider.ControllerClientBuilder, stop <-chan struct{}) {
-	klog.Info("Initialize()")
 	clientset := clientBuilder.ClientOrDie("crusoe-shared-informers")
 	sharedInformer := informers.NewSharedInformerFactory(clientset, 0)
 	sharedInformer.Start(nil)
@@ -63,10 +65,13 @@ func newCloud() (cloudprovider.Interface, error) {
 	apiEndPoint := os.Getenv(APIEndpoint)
 	apiAccessKey := os.Getenv(AccessKey)
 	apiSecretKey := os.Getenv(SecretKey)
-	cc := NewCrusoeClient(apiEndPoint, apiAccessKey, apiSecretKey,
+	cc := auth.NewCrusoeClient(apiEndPoint, apiAccessKey, apiSecretKey,
 		"crusoe-cloud-controller-manager/0.0.1")
+	apiClient := &client.APIClientImpl{
+		CrusoeAPIClient: cc,
+	}
 
 	return &Cloud{
-		crusoeInstances: NewCrusoeInstances(cc),
+		crusoeInstances: instances.NewCrusoeInstances(apiClient),
 	}, nil
 }
