@@ -15,6 +15,14 @@ import (
 	crusoeapi "github.com/crusoecloud/client-go/swagger/v1alpha5"
 )
 
+const (
+	timestampHeader = "X-Crusoe-Timestamp"
+	authHeader      = "Authorization"
+	authVersion     = "1.0"
+)
+
+var errSemicolonSeparator = errors.New("invalid semicolon separator in query")
+
 // AuthenticatingTransport is a struct implementing http.Roundtripper
 // that authenticates a request to Crusoe Cloud before sending it out.
 type AuthenticatingTransport struct {
@@ -43,12 +51,6 @@ func (t AuthenticatingTransport) RoundTrip(r *http.Request) (*http.Response, err
 	//nolint:wrapcheck // error should be forwarded here.
 	return t.RoundTripper.RoundTrip(r)
 }
-
-const (
-	timestampHeader = "X-Crusoe-Timestamp"
-	authHeader      = "Authorization"
-	authVersion     = "1.0"
-)
 
 // Verifies if the token signature is valid for a given request.
 func addSignature(req *http.Request, encodedKeyID, encodedKey string) error {
@@ -108,8 +110,6 @@ func generateMessageV1_0(req *http.Request) ([]byte, error) {
 
 	return []byte(messageString.String()), nil
 }
-
-var errSemicolonSeparator = errors.New("invalid semicolon separator in query")
 
 // Canonicalizes the query into a deterministic string.
 // see https://cs.opensource.google/go/go/+/refs/tags/go1.18.8:src/net/url/url.go;l=921
