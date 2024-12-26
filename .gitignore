@@ -1,0 +1,11 @@
+dist/
+.DS_Store
+*.swp
+coverage.out
+aliaslint.so
+gokart_result.json
+golangci-lint.json
+tests.xml
+coverage.xml
+.vscode/*
+.idea/*

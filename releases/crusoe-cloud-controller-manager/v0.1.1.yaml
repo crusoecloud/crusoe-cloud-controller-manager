@@ -1,0 +1,57 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    k8s-app: crusoe-cloud-controller-manager
+  name: crusoe-cloud-controller-manager
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      k8s-app: crusoe-cloud-controller-manager
+  template:
+    metadata:
+      labels:
+        k8s-app: crusoe-cloud-controller-manager
+    spec:
+      serviceAccountName: crusoe-cloud-controller-manager
+      containers:
+        - name: crusoe-cloud-controller-manager
+          imagePullPolicy: Never
+          # for in-tree providers we use k8s.gcr.io/cloud-controller-manager
+          # this can be replaced with any other image for out-of-tree providers
+          image: crusoe-cloud-controller-manager-prod:0.6
+          command:
+            - /bin/crusoe-cloud-controller-manager
+          env:
+            - name: CRUSOE_PROJECT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: crusoe-secrets
+                  key: CRUSOE_PROJECT_ID
+            - name: CRUSOE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: crusoe-secrets
+                  key: CRUSOE_ACCESS_KEY
+            - name: CRUSOE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: crusoe-secrets
+                  key: CRUSOE_SECRET_KEY
+            - name: CRUSOE_API_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: crusoe-secrets
+                  key: CRUSOE_API_ENDPOINT
+          args:
+            - --v=5
+            - --cloud-provider=crusoe
+            - --cluster-name=kubernetes-2
+            - --use-service-account-credentials
+      tolerations:
+        # this is required so CCM can bootstrap itself
+        - key: node.cloudprovider.kubernetes.io/uninitialized
+          value: "true"
+          effect: NoSchedule
