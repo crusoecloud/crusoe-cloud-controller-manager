@@ -2,6 +2,7 @@ package instances_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
@@ -23,6 +24,7 @@ const (
 	ProviderIDPrefix = "crusoe://"
 	CrusoeProjectID  = "CRUSOE_PROJECT_ID"
 	TestProjectID    = "1841af90-a4f6-4412-8b23-b7035a6c72ae"
+	TestLocation     = "us-easttesting1-a"
 )
 
 func TestNodeAddresses(t *testing.T) {
@@ -47,7 +49,8 @@ func TestNodeAddresses(t *testing.T) {
 				},
 			},
 		},
-		Name: "node1",
+		Name:     "node1",
+		Location: TestLocation,
 	}, nil)
 
 	addresses, err := instanceService.NodeAddresses(context.Background(), types.NodeName(TESTNodeName))
@@ -55,7 +58,7 @@ func TestNodeAddresses(t *testing.T) {
 	require.Len(t, addresses, 3)
 	require.Equal(t, "10.0.0.1", addresses[0].Address)
 	require.Equal(t, "192.168.0.1", addresses[1].Address)
-	require.Equal(t, "node1", addresses[2].Address)
+	require.Equal(t, "node1.us-easttesting1-a.compute.internal", addresses[2].Address)
 }
 
 func TestInstanceID(t *testing.T) {
@@ -126,7 +129,8 @@ func TestInstanceMetadata(t *testing.T) {
 				},
 			},
 		},
-		Name: TESTNodeName,
+		Name:     TESTNodeName,
+		Location: TestLocation,
 	}, nil, nil)
 
 	node := &v1.Node{
@@ -139,7 +143,7 @@ func TestInstanceMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, metadata)
 	require.Equal(t, ProviderIDPrefix+TESTInstanceID, metadata.ProviderID)
-	require.Equal(t, TESTNodeName, metadata.NodeAddresses[2].Address)
+	require.Equal(t, fmt.Sprintf("%s.%s.compute.internal", TESTNodeName, TestLocation), metadata.NodeAddresses[2].Address)
 }
 
 func TestNodeAddressesByProviderID(t *testing.T) {
@@ -163,7 +167,8 @@ func TestNodeAddressesByProviderID(t *testing.T) {
 				},
 			},
 		},
-		Name: TESTNodeName,
+		Name:     TESTNodeName,
+		Location: TestLocation,
 	}, nil, nil)
 
 	addresses, err := instanceService.NodeAddressesByProviderID(context.Background(), ProviderIDPrefix+TESTInstanceID)
@@ -171,7 +176,7 @@ func TestNodeAddressesByProviderID(t *testing.T) {
 	require.Len(t, addresses, 3)
 	require.Equal(t, "10.0.0.1", addresses[0].Address)
 	require.Equal(t, "192.168.0.1", addresses[1].Address)
-	require.Equal(t, TESTNodeName, addresses[2].Address)
+	require.Equal(t, fmt.Sprintf("%s.%s.compute.internal", TESTNodeName, TestLocation), addresses[2].Address)
 }
 
 func TestGetInstanceType(t *testing.T) {
