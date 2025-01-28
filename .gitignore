@@ -9,3 +9,4 @@ tests.xml
 coverage.xml
 .vscode/*
 .idea/*
+vendor/*
