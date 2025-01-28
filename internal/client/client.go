@@ -83,14 +83,20 @@ func (a *APIClientImpl) GetInstanceByID(ctx context.Context,
 	}
 
 	klog.Infof("getInstanceByID: %s", instanceID)
-	instance, response, err := a.CrusoeAPIClient.VMsApi.GetInstance(ctx, projectID, instanceID)
+	listVMOpts := &crusoeapi.VMsApiListInstancesOpts{
+		Ids: optional.NewString(instanceID),
+	}
+	instances, response, err := a.CrusoeAPIClient.VMsApi.ListInstances(ctx, projectID, listVMOpts)
 	if err != nil {
 		return nil, response, fmt.Errorf("failed to list instances: %w", err)
 	}
 	if response != nil {
 		defer response.Body.Close()
 	}
-	klog.Infof("getInstanceByID: %v", instance)
+	klog.Infof("getInstanceByID: %v", instances)
+	if len(instances.Items) == 0 {
+		return nil, nil, ErrInstanceNotFound
+	}
 
-	return &instance, response, nil
+	return &instances.Items[0], response, nil
 }
