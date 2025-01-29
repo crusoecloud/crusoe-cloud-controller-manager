@@ -56,6 +56,8 @@ spec:
                     values:
                       - crusoe-cloud-controller-manager
               topologyKey: "kubernetes.io/hostname"
+      # needed to remove dependency on CNI
+      hostNetwork: true
       containers:
         - name: crusoe-cloud-controller-manager
           image:  ghcr.io/crusoecloud/crusoe-cloud-controller-manager:v0.1.0

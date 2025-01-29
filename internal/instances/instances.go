@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -168,12 +169,19 @@ func (i *Instances) InstanceExists(ctx context.Context, node *v1.Node) (bool, er
 
 func (i *Instances) InstanceMetadata(ctx context.Context, node *v1.Node) (*cloudprovider.InstanceMetadata, error) {
 	klog.Infof("Get Instance Metadata for (%v)", node.Name)
-	currInstance, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(node.Spec.ProviderID))
+	prefixedProviderID, err := getProviderID(ctx, node, i)
+	if err != nil {
+		klog.Errorf("could not get provider ID from Crusoe Cloud %v", err)
+
+		return nil, err
+	}
+	providerID := getInstanceIDFromProviderID(prefixedProviderID)
+	currInstance, responseBody, err := i.apiClient.GetInstanceByID(ctx, providerID)
 	if responseBody != nil {
 		defer responseBody.Body.Close()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to get instance by ID %s: %w", node.Spec.ProviderID, err)
+		return nil, fmt.Errorf("failed to get instance by ID %s: %w", providerID, err)
 	}
 	klog.Infof("InstanceMetadata for (%v:%v)", node.Name, currInstance)
 	nodeAddress, err := getNodeAddress(currInstance)
@@ -218,6 +226,17 @@ func NewCrusoeInstances(c client.APIClient) *Instances {
 
 func getProviderID(ctx context.Context, node *v1.Node, i *Instances) (string, error) {
 	providerID := node.Spec.ProviderID
+	// While kubelet does not update the node.spec or the node.status.addresses or metadata fields when
+	// node information changes it is still able to update the nodeInfo field in node.status. Kubelet updates
+	// node.Status.NodeInfo.SystemUUID to /sys/class/dmi/id/product_uuid which is the correct VM ID in Crusoe Cloud
+	if node.Status.NodeInfo.SystemUUID != "" &&
+		getInstanceIDFromProviderID(node.Spec.ProviderID) != node.Status.NodeInfo.SystemUUID {
+
+		klog.Warningf("ProviderID and SystemUUID do not match; providerID: "+
+			"%s; systemUUID: %s. Fetching UUID from Crusoe Cloud directly.",
+			providerID, node.Status.NodeInfo.SystemUUID)
+		providerID = ""
+	}
 	if providerID == "" {
 		currInstance, err := i.apiClient.GetInstanceByName(ctx, node.Name)
 		if err != nil {
@@ -230,7 +249,7 @@ func getProviderID(ctx context.Context, node *v1.Node, i *Instances) (string, er
 }
 
 func getInstanceIDFromProviderID(providerID string) string {
-	return providerID[len(ProviderPrefix):]
+	return strings.TrimPrefix(providerID, ProviderPrefix)
 }
 
 func getNodeAddress(currInstance *crusoeapi.InstanceV1Alpha5) ([]v1.NodeAddress, error) {
@@ -243,7 +262,7 @@ func getNodeAddress(currInstance *crusoeapi.InstanceV1Alpha5) ([]v1.NodeAddress,
 		Address: currInstance.NetworkInterfaces[0].Ips[0].PublicIpv4.Address,
 	}, v1.NodeAddress{
 		Type:    v1.NodeHostName,
-		Address: currInstance.Name,
+		Address: fmt.Sprintf("%s.%s.compute.internal", currInstance.Name, currInstance.Location),
 	},
 	)
 
