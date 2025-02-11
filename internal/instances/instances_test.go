@@ -116,7 +116,8 @@ func TestInstanceShutdownByProviderIDInstanceMissingFromCloudProvider(t *testing
 	defer ctrl.Finish()
 
 	mockClient := mock_client.NewMockApiClient(ctrl)
-	mockClient.EXPECT().GetInstanceByID(gomock.Any(), TESTInstanceID).Return(nil, nil, client.ErrInstanceNotFound).AnyTimes()
+	mockClient.EXPECT().GetInstanceByID(gomock.Any(), TESTInstanceID).Return(nil,
+		nil, client.ErrInstanceNotFound).AnyTimes()
 	instanceService := instances.NewCrusoeInstances(mockClient)
 
 	// Instance shutdown by ID should return true on third attempt
