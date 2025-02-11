@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	v1alpha5 "github.com/crusoecloud/client-go/swagger/v1alpha5"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	mock_client "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client/mock"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/instances"
 	"github.com/golang/mock/gomock"
@@ -105,6 +106,37 @@ func TestInstanceShutdownByProviderID(t *testing.T) {
 	}, nil, nil)
 
 	shutdown, err := instanceService.InstanceShutdownByProviderID(context.Background(), ProviderIDPrefix+TESTInstanceID)
+	require.NoError(t, err)
+	require.True(t, shutdown)
+}
+
+func TestInstanceShutdownByProviderIDInstanceMissingFromCloudProvider(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := mock_client.NewMockApiClient(ctrl)
+	mockClient.EXPECT().GetInstanceByID(gomock.Any(), TESTInstanceID).Return(nil, nil, client.ErrInstanceNotFound).AnyTimes()
+	instanceService := instances.NewCrusoeInstances(mockClient)
+
+	// Instance shutdown by ID should return true on third attempt
+	// attempt #1
+	shutdown, err := instanceService.InstanceShutdownByProviderID(context.Background(), ProviderIDPrefix+TESTInstanceID)
+	require.ErrorIs(t, err, client.ErrInstanceNotFound)
+	require.False(t, shutdown)
+
+	// attempt #2
+	shutdown, err = instanceService.InstanceShutdownByProviderID(context.Background(), ProviderIDPrefix+TESTInstanceID)
+	require.ErrorIs(t, err, client.ErrInstanceNotFound)
+	require.False(t, shutdown)
+
+	// attempt #3
+	shutdown, err = instanceService.InstanceShutdownByProviderID(context.Background(), ProviderIDPrefix+TESTInstanceID)
+	require.ErrorIs(t, err, client.ErrInstanceNotFound)
+	require.False(t, shutdown)
+
+	// attempt #4
+	shutdown, err = instanceService.InstanceShutdownByProviderID(context.Background(), ProviderIDPrefix+TESTInstanceID)
 	require.NoError(t, err)
 	require.True(t, shutdown)
 }

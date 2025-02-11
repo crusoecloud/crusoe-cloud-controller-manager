@@ -25,6 +25,7 @@ var ErrAssertTimeTypeFailed = errors.New("failed to assert type time.Time for fi
 
 type Instances struct {
 	nodeFirstSeen sync.Map
+	nodeShutdown  sync.Map
 	apiClient     client.APIClient
 }
 
@@ -100,6 +101,23 @@ func (i *Instances) InstanceShutdownByProviderID(ctx context.Context, providerID
 		defer responseBody.Body.Close()
 	}
 	if err != nil {
+		if err == client.ErrInstanceNotFound {
+			attempt, ok := i.nodeShutdown.Load(providerID)
+			if !ok {
+				attempt = 1
+				i.nodeShutdown.Store(providerID, attempt)
+
+				return false, err
+			}
+			if attempt.(int) >= 3 {
+
+				return true, nil
+			}
+			intAttempt := attempt.(int)
+			i.nodeShutdown.Store(providerID, (intAttempt + 1))
+
+			return false, err
+		}
 		return false, fmt.Errorf("failed to get instance by provider ID %s: %w", providerID, err)
 	}
 	if currInstance == nil || currInstance.State == "STATE_SHUTOFF" || currInstance.State == "STATE_SHUTDOWN" {
