@@ -25,6 +25,7 @@ var ErrAssertTimeTypeFailed = errors.New("failed to assert type time.Time for fi
 
 type Instances struct {
 	nodeFirstSeen sync.Map
+	nodeShutdown  sync.Map
 	apiClient     client.APIClient
 }
 
@@ -100,6 +101,10 @@ func (i *Instances) InstanceShutdownByProviderID(ctx context.Context, providerID
 		defer responseBody.Body.Close()
 	}
 	if err != nil {
+		if errors.Is(err, client.ErrInstanceNotFound) {
+			return i.handleInstanceNotFoundErr(providerID, err)
+		}
+
 		return false, fmt.Errorf("failed to get instance by provider ID %s: %w", providerID, err)
 	}
 	if currInstance == nil || currInstance.State == "STATE_SHUTOFF" || currInstance.State == "STATE_SHUTDOWN" {
@@ -267,4 +272,26 @@ func getNodeAddress(currInstance *crusoeapi.InstanceV1Alpha5) ([]v1.NodeAddress,
 	)
 
 	return nodeAddress, nil
+}
+
+func (i *Instances) handleInstanceNotFoundErr(providerID string, orignalErr error) (instanceShutdown bool, err error) {
+	attempt, ok := i.nodeShutdown.Load(providerID)
+	if !ok {
+		i.nodeShutdown.Store(providerID, 1)
+
+		return false, orignalErr
+	}
+	intAttempt, ok := attempt.(int)
+	if !ok {
+		// store correct data to avoid conversion issues in next iteration
+		i.nodeShutdown.Store(providerID, 1)
+
+		return false, orignalErr
+	}
+	if intAttempt >= 3 {
+		return true, nil
+	}
+	i.nodeShutdown.Store(providerID, (intAttempt + 1))
+
+	return false, orignalErr
 }
