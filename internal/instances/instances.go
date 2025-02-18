@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	FIVE           = 5
-	ProviderPrefix = "crusoe://"
+	InstanceNotFoundInterval = 2 * time.Minute
+	ProviderPrefix           = "crusoe://"
 )
 
 var ErrAssertTimeTypeFailed = errors.New("failed to assert type time.Time for firstSeen")
@@ -125,8 +125,9 @@ func (i *Instances) InstanceShutdown(ctx context.Context, node *v1.Node) (bool, 
 	return i.InstanceShutdownByProviderID(ctx, providerID)
 }
 
+//nolint:cyclop // must perform all checks before returning instance does not exists
 func (i *Instances) InstanceExistsByProviderID(ctx context.Context, providerID string) (bool, error) {
-	_, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(providerID))
+	inst, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(providerID))
 	if responseBody != nil {
 		defer responseBody.Body.Close()
 	}
@@ -144,17 +145,19 @@ func (i *Instances) InstanceExistsByProviderID(ctx context.Context, providerID s
 	}
 	firstSeenTime, ok := firstSeen.(time.Time)
 	if !ok {
-		return false, ErrAssertTimeTypeFailed
+		// update the in-memory state to current time so that we can process it in next iteration
+		i.nodeFirstSeen.Store(providerID, currTime)
+		firstSeenTime = currTime
 	}
 	timeDiff := currTime.Sub(firstSeenTime)
-	if responseBody != nil && responseBody.StatusCode == 404 {
-		if timeDiff < FIVE*time.Minute {
+	if inst == nil || (responseBody != nil && responseBody.StatusCode == 404) {
+		if timeDiff < InstanceNotFoundInterval {
 			klog.Infof("timediff: %v", timeDiff)
-			klog.Infof("Node %v first seen less than 5 minute ago", providerID)
+			klog.Infof("Node %v not seen for less than 2 minutes", providerID)
 
 			return true, nil
 		}
-		klog.Infof("Node %v first seen more than 5 minute ago", providerID)
+		klog.Infof("Node %v not seen for more than 2 minutes", providerID)
 
 		return false, nil
 	}
