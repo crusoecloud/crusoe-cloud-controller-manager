@@ -125,7 +125,7 @@ func (i *Instances) InstanceShutdown(ctx context.Context, node *v1.Node) (bool, 
 	return i.InstanceShutdownByProviderID(ctx, providerID)
 }
 
-//nolint:cyclop // must perform all checks before returning instance does not exists
+//nolint:cyclop // must perform all checks before returning instance does not exist
 func (i *Instances) InstanceExistsByProviderID(ctx context.Context, providerID string) (bool, error) {
 	inst, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(providerID))
 	if responseBody != nil {

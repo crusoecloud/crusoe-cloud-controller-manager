@@ -5,10 +5,12 @@ import (
 	"os"
 
 	cloudcontrollermanager "github.com/crusoecloud/crusoe-cloud-controller-manager/internal"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/node"
 	"k8s.io/apimachinery/pkg/util/wait"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/cloud-provider/app"
 	"k8s.io/cloud-provider/app/config"
+	"k8s.io/cloud-provider/names"
 	"k8s.io/cloud-provider/options"
 	"k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/logs"
@@ -29,6 +31,14 @@ func main() {
 	opts.Authentication.SkipInClusterLookup = true
 
 	cloudcontrollermanager.RegisterCloudProvider()
+
+	// Set the default CloudNodeLifecycleController to our custom implementation
+	app.DefaultInitFuncConstructors[names.CloudNodeLifecycleController] = app.ControllerInitFuncConstructor{
+		InitContext: app.ControllerInitContext{
+			ClientName: "node-controller",
+		},
+		Constructor: node.StartCloudNodeLifecycleControllerWrapper,
+	}
 
 	command := app.NewCloudControllerManagerCommand(
 		opts,
