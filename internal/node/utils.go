@@ -71,6 +71,7 @@ func CleanUpVolumeAttachmentsForNode(ctx context.Context, kubeClient clientset.I
 		if volumeAttachment.Spec.NodeName != nodeName {
 			continue
 		}
+		klog.Infof("Deleting volume attachment %s for node %s", volumeAttachment.Name, nodeName)
 		deleteErr := kubeClient.StorageV1().VolumeAttachments().Delete(ctx, volumeAttachment.Name, metav1.DeleteOptions{})
 		if deleteErr != nil {
 			if errors.IsNotFound(deleteErr) {
