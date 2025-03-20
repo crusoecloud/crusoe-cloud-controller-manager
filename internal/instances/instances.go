@@ -152,7 +152,7 @@ func (i *Instances) InstanceExistsByProviderID(ctx context.Context, providerID s
 	timeDiff := currTime.Sub(firstSeenTime)
 	if inst == nil || (responseBody != nil && responseBody.StatusCode == 404) {
 		if timeDiff < InstanceNotFoundInterval {
-			klog.Infof("timediff: %v", timeDiff)
+			klog.Infof("Node %v last seen: %v", providerID, timeDiff)
 			klog.Infof("Node %v not seen for less than 2 minutes", providerID)
 
 			return true, nil

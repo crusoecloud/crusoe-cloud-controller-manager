@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	cloudprovider "k8s.io/cloud-provider"
@@ -29,16 +30,22 @@ func StartCloudNodeLifecycleControllerWrapper(initContext app.ControllerInitCont
 
 //nolint:gocritic // need to follow upstream function signature
 func startCloudNodeLifecycleController(ctx context.Context,
-	initContext app.ControllerInitContext,
+	_ app.ControllerInitContext,
 	controlexContext controllermanagerapp.ControllerContext,
 	completedConfig *config.CompletedConfig,
 	cloud cloudprovider.Interface,
 ) (controller.Interface, bool, error) {
+	// Use CCM's kubeconfig to create a clientset for the custom node lifecycle controller because we need permissions
+	// to list and delete VolumeAttachments
+	ccmClientSet, err := clientset.NewForConfig(completedConfig.Kubeconfig)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to create clientset from ccm kubeconfig: %w", err)
+	}
+
 	// Start the cloudNodeLifecycleController
 	cloudNodeLifecycleController, err := NewCloudNodeLifecycleController(
 		completedConfig.SharedInformers.Core().V1().Nodes(),
-		// cloud node lifecycle controller uses existing cluster role from node-controller
-		completedConfig.ClientBuilder.ClientOrDie(initContext.ClientName),
+		ccmClientSet,
 		cloud,
 		completedConfig.ComponentConfig.KubeCloudShared.NodeMonitorPeriod.Duration,
 	)
@@ -54,19 +61,24 @@ func startCloudNodeLifecycleController(ctx context.Context,
 }
 
 func CleanUpVolumeAttachmentsForNode(ctx context.Context, kubeClient clientset.Interface, nodeName string) error {
-	volumeAttachments, listErr := kubeClient.StorageV1().VolumeAttachments().List(ctx,
-		metav1.ListOptions{FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName)})
-
+	volumeAttachments, listErr := kubeClient.StorageV1().VolumeAttachments().List(ctx, metav1.ListOptions{})
 	if listErr != nil {
-		return fmt.Errorf("failed to list volume attachments for node %s: %w", nodeName, listErr)
+		return fmt.Errorf("failed to list all volume attachments: %w", listErr)
 	}
 
 	for index := range len(volumeAttachments.Items) {
 		volumeAttachment := volumeAttachments.Items[index]
+		if volumeAttachment.Spec.NodeName != nodeName {
+			continue
+		}
 		deleteErr := kubeClient.StorageV1().VolumeAttachments().Delete(ctx, volumeAttachment.Name, metav1.DeleteOptions{})
 		if deleteErr != nil {
-			klog.Errorf("failed to delete volume attachment %s for node %s: %v",
-				volumeAttachment.Name, nodeName, deleteErr)
+			if errors.IsNotFound(deleteErr) {
+				klog.Infof("volume attachment %s for node %s already deleted, skipping delete", volumeAttachment.Name, nodeName)
+			} else {
+				klog.Errorf("failed to delete volume attachment %s for node %s: %v",
+					volumeAttachment.Name, nodeName, deleteErr)
+			}
 		}
 	}
 
