@@ -230,8 +230,11 @@ func (c *CloudNodeLifecycleController) getProviderID(ctx context.Context, node *
 func (c *CloudNodeLifecycleController) shutdownInCloudProvider(ctx context.Context, node *v1.Node) (bool, error) {
 	if instanceV2, ok := c.cloud.InstancesV2(); ok {
 		shutDown, err := instanceV2.InstanceShutdown(ctx, node)
+		if err != nil {
+			return shutDown, fmt.Errorf("failed to get instance shutdown status: %w", err)
+		}
 
-		return shutDown, fmt.Errorf("failed to get instance shutdown status: %w", err)
+		return shutDown, nil
 	}
 
 	instances, ok := c.cloud.Instances()
@@ -264,8 +267,11 @@ func (c *CloudNodeLifecycleController) shutdownInCloudProvider(ctx context.Conte
 func (c *CloudNodeLifecycleController) ensureNodeExistsByProviderID(ctx context.Context, node *v1.Node) (bool, error) {
 	if instanceV2, ok := c.cloud.InstancesV2(); ok {
 		exists, err := instanceV2.InstanceExists(ctx, node)
+		if err != nil {
+			return exists, fmt.Errorf("failed to get instance existence: %w", err)
+		}
 
-		return exists, fmt.Errorf("failed to get instance existence: %w", err)
+		return exists, nil
 	}
 
 	instances, ok := c.cloud.Instances()
