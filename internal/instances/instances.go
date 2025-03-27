@@ -125,7 +125,7 @@ func (i *Instances) InstanceShutdown(ctx context.Context, node *v1.Node) (bool, 
 	return i.InstanceShutdownByProviderID(ctx, providerID)
 }
 
-//nolint:cyclop // must perform all checks before returning instance does not exists
+//nolint:cyclop // must perform all checks before returning instance does not exist
 func (i *Instances) InstanceExistsByProviderID(ctx context.Context, providerID string) (bool, error) {
 	inst, responseBody, err := i.apiClient.GetInstanceByID(ctx, getInstanceIDFromProviderID(providerID))
 	if responseBody != nil {
@@ -152,7 +152,7 @@ func (i *Instances) InstanceExistsByProviderID(ctx context.Context, providerID s
 	timeDiff := currTime.Sub(firstSeenTime)
 	if inst == nil || (responseBody != nil && responseBody.StatusCode == 404) {
 		if timeDiff < InstanceNotFoundInterval {
-			klog.Infof("timediff: %v", timeDiff)
+			klog.Infof("Node %v last seen: %v", providerID, timeDiff)
 			klog.Infof("Node %v not seen for less than 2 minutes", providerID)
 
 			return true, nil

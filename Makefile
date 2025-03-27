@@ -65,7 +65,7 @@ lint: ## Verifies `golangci-lint` passes
 lint-ci: ## Verifies `golangci-lint` passes and outputs in CI-friendly format
 	@echo "==> $@"
 	@golangci-lint version
-	@golangci-lint run ./... --out-format code-climate > golangci-lint.json
+	@golangci-lint run ./... --timeout=10m --out-format code-climate > golangci-lint.json
 
 .PHONY: build
 build: ## Builds the executable and places it in the build dir
