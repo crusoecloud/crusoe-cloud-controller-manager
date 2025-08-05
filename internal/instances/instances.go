@@ -214,6 +214,7 @@ func (i *Instances) InstanceMetadata(ctx context.Context, node *v1.Node) (*cloud
 	additionalLabels["crusoe.ai/instance.group.id"] = currInstance.InstanceGroupId
 	additionalLabels["crusoe.ai/instance.template.id"] = currInstance.InstanceTemplateId
 	additionalLabels["crusoe.ai/instance.state"] = currInstance.State
+	additionalLabels["crusoe.ai/pod.id"] = currInstance.PodId
 	metadata := cloudprovider.InstanceMetadata{
 		ProviderID:       ProviderPrefix + currInstance.Id,
 		InstanceType:     currInstance.Type_,
