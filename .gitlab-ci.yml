@@ -4,6 +4,8 @@ include:
 
 variables:
   CI_IMAGE: registry.gitlab.com/crusoeenergy/tools/go-ci-1.22
+  # Extract K8s version from branch name if it's a release branch
+  K8S_VERSION: ${CI_COMMIT_REF_NAME#release-}
 
 test_and_lint:
   rules:
@@ -21,10 +23,18 @@ build_and_push:
         cd ${SUBPROJECT_REL_PATH}
       fi
     - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN registry.gitlab.com
+    # Extract K8s version from branch name if it's a release branch
+    - |
+      if [[ "$CI_COMMIT_REF_NAME" =~ ^release-[0-9]+\.[0-9]+$ ]]; then
+        K8S_VERSION=${CI_COMMIT_REF_NAME#release-}
+        IMAGE_TAG="${CI_COMMIT_REF_NAME##*/}-k8s-${K8S_VERSION}"
+      else
+        IMAGE_TAG="${CI_COMMIT_REF_NAME##*/}"
+      fi
     # Build an image based on the commit ref, this will be available
     # internally for testing feature branches and testing pre-release versions
-    - docker build --no-cache --pull -f "${DOCKERFILE:-./Dockerfile}" --build-arg CI_SERVER_HOST="$CI_SERVER_HOST" --build-arg CI_JOB_TOKEN="$CI_JOB_TOKEN" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME="$CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_VERSION="$CI_COMMIT_REF_NAME" -t $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}" .
-    - docker push $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}"
+    - docker build --no-cache --pull -f "${DOCKERFILE:-./Dockerfile}" --build-arg CI_SERVER_HOST="$CI_SERVER_HOST" --build-arg CI_JOB_TOKEN="$CI_JOB_TOKEN" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME="$CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_VERSION="$CI_COMMIT_REF_NAME" --build-arg K8S_VERSION="$K8S_VERSION" -t $RELEASE_IMAGE:"$IMAGE_TAG" .
+    - docker push $RELEASE_IMAGE:"$IMAGE_TAG"
 
 # Remove the tag_semver and pages jobs from merges into main.
 # The tag_semver job will be run using a GitHub action instead

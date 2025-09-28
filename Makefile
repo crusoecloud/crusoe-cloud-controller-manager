@@ -6,6 +6,10 @@ PKG := github.com/crusoecloud/crusoe-cloud-controller-manager/cmd/$(NAME)
 BUILDDIR := ${PREFIX}/dist
 # Set any default go build tags
 BUILDTAGS :=
+# If K8S_VERSION is set, add it as a build tag
+ifdef K8S_VERSION
+BUILDTAGS := k8s_$(subst .,_,$(K8S_VERSION))
+endif
 
 GOLANGCI_VERSION = v1.55.2
 GO_ACC_VERSION = v0.2.8
@@ -69,21 +73,21 @@ lint-ci: ## Verifies `golangci-lint` passes and outputs in CI-friendly format
 
 .PHONY: build
 build: ## Builds the executable and places it in the build dir
-	@go build -o ${BUILDDIR}/${NAME} ${PKG}
+	@go build -tags "$(BUILDTAGS)" -o ${BUILDDIR}/${NAME} ${PKG}
 
 .PHONY: cross
 cross: ## Builds the cross compiled executable for use within a container
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/${NAME} ${GO_LDFLAGS} ${PKG}
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags "$(BUILDTAGS)" -o ${BUILDDIR}/${NAME} ${GO_LDFLAGS} ${PKG}
 
 ## build-linux: Build Linux amd64 binary locally.
 .PHONY: build-linux
 build-linux:
 	@echo " $(LDFLAGS_LINUX) "
-	@CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build $(LDFLAGS_LINUX) -o ./bin/$(NAME) ./cmd/crusoe-cloud-controller-manager/$(wildcard *.go)
+	@CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -tags "$(BUILDTAGS)" $(LDFLAGS_LINUX) -o ./bin/$(NAME) ./cmd/crusoe-cloud-controller-manager/$(wildcard *.go)
 
 .PHONY: install
 install: ## Builds and installs the executable on PATH
-	@go install ${PKG}
+	@go install -tags "$(BUILDTAGS)" ${PKG}
 
 .PHONY: help
 help:
