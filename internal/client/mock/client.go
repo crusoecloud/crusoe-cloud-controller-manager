@@ -10,6 +10,7 @@ import (
 	reflect "reflect"
 
 	swagger "github.com/crusoecloud/client-go/swagger/v1alpha5"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	gomock "github.com/golang/mock/gomock"
 )
 
@@ -80,4 +81,19 @@ func (m *MockApiClient) GetInstanceByName(ctx context.Context, nodeName string) 
 func (mr *MockApiClientMockRecorder) GetInstanceByName(ctx, nodeName interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetInstanceByName", reflect.TypeOf((*MockApiClient)(nil).GetInstanceByName), ctx, nodeName)
+}
+
+// ListNodePools mocks base method.
+func (m *MockApiClient) ListNodePools(ctx context.Context, clusterID string) ([]client.NodePool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListNodePools", ctx, clusterID)
+	ret0, _ := ret[0].([]client.NodePool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListNodePools indicates an expected call of ListNodePools.
+func (mr *MockApiClientMockRecorder) ListNodePools(ctx, clusterID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListNodePools", reflect.TypeOf((*MockApiClient)(nil).ListNodePools), ctx, clusterID)
 }

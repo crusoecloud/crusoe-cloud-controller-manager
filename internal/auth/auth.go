@@ -195,3 +195,10 @@ func NewCrusoeClient(host, key, secret, userAgent string) *crusoeapi.APIClient {
 
 	return crusoeapi.NewAPIClient(cfg)
 }
+
+// NewHTTPClientWithAuth creates an HTTP client with authenticating transport.
+func NewHTTPClientWithAuth(key, secret string) *http.Client {
+	return &http.Client{
+		Transport: NewAuthenticatingTransport(http.DefaultTransport, key, secret),
+	}
+}

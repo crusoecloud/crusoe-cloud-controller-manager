@@ -3,7 +3,10 @@ package node
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
 
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
@@ -56,6 +59,62 @@ func startCloudNodeLifecycleController(ctx context.Context,
 	}
 
 	go cloudNodeLifecycleController.Run(ctx, controlexContext.ControllerManagerMetrics)
+
+	return nil, true, nil
+}
+
+const (
+	DefaultNodeTaintSyncPeriod = 60 * time.Second
+)
+
+// StartNodeTaintControllerWrapper creates a wrapper function to start the NodeTaintController.
+func StartNodeTaintControllerWrapper(
+	apiClient client.APIClient,
+	_ app.ControllerInitContext,
+	completedConfig *config.CompletedConfig,
+	_ cloudprovider.Interface,
+) app.InitFunc {
+	return func(ctx context.Context,
+		controllerContext controllermanagerapp.ControllerContext,
+	) (controller.Interface, bool, error) {
+		return startNodeTaintController(ctx, apiClient, controllerContext, completedConfig)
+	}
+}
+
+//nolint:gocritic // need to follow upstream function signature
+func startNodeTaintController(ctx context.Context,
+	apiClient client.APIClient,
+	controllerContext controllermanagerapp.ControllerContext,
+	completedConfig *config.CompletedConfig,
+) (controller.Interface, bool, error) {
+	clusterID := os.Getenv(client.CrusoeClusterID)
+	if clusterID == "" {
+		klog.Warning("CRUSOE_CLUSTER_ID not set, NodeTaintController will not start")
+
+		return nil, false, nil
+	}
+
+	ccmClientSet, err := clientset.NewForConfig(completedConfig.Kubeconfig)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to create clientset from ccm kubeconfig: %w", err)
+	}
+
+	nodeTaintController, err := NewTaintController(
+		completedConfig.SharedInformers.Core().V1().Nodes(),
+		ccmClientSet,
+		apiClient,
+		clusterID,
+		DefaultNodeTaintSyncPeriod,
+	)
+	if err != nil {
+		klog.Warningf("failed to start node taint controller: %s", err)
+
+		return nil, false, nil
+	}
+
+	go nodeTaintController.Run(ctx, controllerContext.ControllerManagerMetrics)
+
+	klog.Info("Started NodeTaintController")
 
 	return nil, true, nil
 }

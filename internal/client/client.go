@@ -14,22 +14,34 @@ import (
 )
 
 const (
-	CrusoeProjectID = "CRUSOE_PROJECT_ID"
+	CrusoeProjectID  = "CRUSOE_PROJECT_ID"
+	CrusoeClusterID  = "CRUSOE_CLUSTER_ID"
+	CrusoeAPIBaseURL = "CRUSOE_API_ENDPOINT"
 )
 
 var (
-	ErrInstanceNotFound = errors.New("instance not found")
-	ErrProjectIDNotSet  = errors.New("CRUSOE_PROJECT_ID environment variable is not set")
+	ErrInstanceNotFound  = errors.New("instance not found")
+	ErrProjectIDNotSet   = errors.New("CRUSOE_PROJECT_ID environment variable is not set")
+	ErrClusterIDNotSet   = errors.New("CRUSOE_CLUSTER_ID environment variable is not set")
+	ErrAPIEndpointNotSet = errors.New("CRUSOE_API_ENDPOINT environment variable is not set")
 )
 
 type APIClientImpl struct {
 	CrusoeAPIClient *crusoeapi.APIClient
 }
 
+// NodePool represents a Kubernetes node pool from the Crusoe API.
+type NodePool struct {
+	ID         string
+	Name       string
+	NodeLabels map[string]string
+}
+
 type APIClient interface {
 	GetInstanceByName(ctx context.Context, nodeName string) (*crusoeapi.InstanceV1Alpha5, error)
 	GetIBNetwork(ctx context.Context, projectID, ibPartitionID string) (*crusoeapi.IbPartition, error)
 	GetInstanceByID(ctx context.Context, instanceID string) (*crusoeapi.InstanceV1Alpha5, *http.Response, error)
+	ListNodePools(ctx context.Context, clusterID string) ([]NodePool, error)
 }
 
 func (a *APIClientImpl) GetInstanceByName(ctx context.Context, nodeName string,
@@ -99,4 +111,36 @@ func (a *APIClientImpl) GetInstanceByID(ctx context.Context,
 	}
 
 	return &instances.Items[0], response, nil
+}
+
+func (a *APIClientImpl) ListNodePools(ctx context.Context, clusterID string) ([]NodePool, error) {
+	projectID := os.Getenv(CrusoeProjectID)
+	if projectID == "" {
+		return nil, ErrProjectIDNotSet
+	}
+
+	opts := &crusoeapi.KubernetesNodePoolsApiListNodePoolsOpts{
+		ClusterId: optional.NewString(clusterID),
+	}
+
+	resp, httpResp, err := a.CrusoeAPIClient.KubernetesNodePoolsApi.ListNodePools(ctx, projectID, opts)
+	if httpResp != nil {
+		defer httpResp.Body.Close()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to list node pools: %w", err)
+	}
+
+	nodePools := make([]NodePool, len(resp.Items))
+	for i := range resp.Items {
+		nodePools[i] = NodePool{
+			ID:         resp.Items[i].Id,
+			Name:       resp.Items[i].Name,
+			NodeLabels: resp.Items[i].NodeLabels,
+		}
+	}
+
+	klog.V(4).Infof("ListNodePools: found %d node pools for cluster %s", len(nodePools), clusterID)
+
+	return nodePools, nil
 }
