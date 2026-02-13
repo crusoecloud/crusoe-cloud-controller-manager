@@ -5,6 +5,8 @@ import (
 	"os"
 
 	cloudcontrollermanager "github.com/crusoecloud/crusoe-cloud-controller-manager/internal"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/auth"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/node"
 	"k8s.io/apimachinery/pkg/util/wait"
 	cloudprovider "k8s.io/cloud-provider"
@@ -19,7 +21,10 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const ProviderName = "crusoe"
+const (
+	ProviderName            = "crusoe"
+	NodeTaintControllerName = "node-taint-controller"
+)
 
 func main() {
 	opts, err := options.NewCloudControllerManagerOptions()
@@ -32,12 +37,28 @@ func main() {
 
 	cloudcontrollermanager.RegisterCloudProvider()
 
+	// Create API client for NodeTaintController
+	apiClient := createAPIClient()
+
 	// Set the default CloudNodeLifecycleController to our custom implementation
 	app.DefaultInitFuncConstructors[names.CloudNodeLifecycleController] = app.ControllerInitFuncConstructor{
 		InitContext: app.ControllerInitContext{
 			ClientName: "node-controller",
 		},
 		Constructor: node.StartCloudNodeLifecycleControllerWrapper,
+	}
+
+	// Register the NodeTaintController
+	app.DefaultInitFuncConstructors[NodeTaintControllerName] = app.ControllerInitFuncConstructor{
+		InitContext: app.ControllerInitContext{
+			ClientName: NodeTaintControllerName,
+		},
+		Constructor: func(initContext app.ControllerInitContext,
+			completedConfig *config.CompletedConfig,
+			cloud cloudprovider.Interface,
+		) app.InitFunc {
+			return node.StartNodeTaintControllerWrapper(apiClient, initContext, completedConfig, cloud)
+		},
 	}
 
 	command := app.NewCloudControllerManagerCommand(
@@ -70,4 +91,21 @@ func doInitializer(cfg *config.CompletedConfig) cloudprovider.Interface {
 	}
 
 	return cloud
+}
+
+func createAPIClient() client.APIClient {
+	apiEndPoint := os.Getenv("CRUSOE_API_ENDPOINT")
+	apiAccessKey := os.Getenv("CRUSOE_ACCESS_KEY")
+	apiSecretKey := os.Getenv("CRUSOE_SECRET_KEY")
+
+	cc := auth.NewCrusoeClient(apiEndPoint, apiAccessKey, apiSecretKey,
+		"crusoe-cloud-controller-manager/0.0.1")
+
+	// Create HTTP client with authenticating transport for nodepool API calls
+	httpClient := auth.NewHTTPClientWithAuth(apiAccessKey, apiSecretKey)
+
+	return &client.APIClientImpl{
+		CrusoeAPIClient: cc,
+		HTTPClient:      httpClient,
+	}
 }
