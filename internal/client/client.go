@@ -2,10 +2,8 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -30,15 +28,13 @@ var (
 
 type APIClientImpl struct {
 	CrusoeAPIClient *crusoeapi.APIClient
-	HTTPClient      *http.Client
 }
 
 // NodePool represents a Kubernetes node pool from the Crusoe API.
 type NodePool struct {
-	ID              string
-	Name            string
-	InstanceGroupID string
-	NodeLabels      map[string]string
+	ID         string
+	Name       string
+	NodeLabels map[string]string
 }
 
 type APIClient interface {
@@ -117,65 +113,30 @@ func (a *APIClientImpl) GetInstanceByID(ctx context.Context,
 	return &instances.Items[0], response, nil
 }
 
-// nodePoolAPIResponse represents the response from the nodepool list API.
-type nodePoolAPIResponse struct {
-	NodePools []nodePoolItem `json:"node_pools"`
-}
-
-type nodePoolItem struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	InstanceGroupID string            `json:"instance_group_id"`
-	NodeLabels      map[string]string `json:"node_labels"`
-}
-
 func (a *APIClientImpl) ListNodePools(ctx context.Context, clusterID string) ([]NodePool, error) {
 	projectID := os.Getenv(CrusoeProjectID)
 	if projectID == "" {
 		return nil, ErrProjectIDNotSet
 	}
 
-	apiEndpoint := os.Getenv(CrusoeAPIBaseURL)
-	if apiEndpoint == "" {
-		return nil, ErrAPIEndpointNotSet
+	opts := &crusoeapi.KubernetesNodePoolsApiListNodePoolsOpts{
+		ClusterId: optional.NewString(clusterID),
 	}
 
-	url := fmt.Sprintf("%s/kubernetes/node-pools?cluster_ids=%s&project_ids=%s",
-		strings.TrimSuffix(apiEndpoint, "/"), clusterID, projectID)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	resp, httpResp, err := a.CrusoeAPIClient.KubernetesNodePoolsApi.ListNodePools(ctx, projectID, opts)
+	if httpResp != nil {
+		defer httpResp.Body.Close()
 	}
-
-	resp, err := a.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list node pools: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to list node pools: status %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	var apiResp nodePoolAPIResponse
-	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	nodePools := make([]NodePool, len(apiResp.NodePools))
-	for i, np := range apiResp.NodePools {
+	nodePools := make([]NodePool, len(resp.Items))
+	for i, np := range resp.Items {
 		nodePools[i] = NodePool{
-			ID:              np.ID,
-			Name:            np.Name,
-			InstanceGroupID: np.InstanceGroupID,
-			NodeLabels:      np.NodeLabels,
+			ID:         np.Id,
+			Name:       np.Name,
+			NodeLabels: np.NodeLabels,
 		}
 	}
 

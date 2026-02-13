@@ -101,11 +101,7 @@ func createAPIClient() client.APIClient {
 	cc := auth.NewCrusoeClient(apiEndPoint, apiAccessKey, apiSecretKey,
 		"crusoe-cloud-controller-manager/0.0.1")
 
-	// Create HTTP client with authenticating transport for nodepool API calls
-	httpClient := auth.NewHTTPClientWithAuth(apiAccessKey, apiSecretKey)
-
 	return &client.APIClientImpl{
 		CrusoeAPIClient: cc,
-		HTTPClient:      httpClient,
 	}
 }

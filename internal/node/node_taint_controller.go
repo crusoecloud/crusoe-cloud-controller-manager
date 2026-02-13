@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	TaintLabelPrefix       = "crusoe.ai/taint."
-	ManagedTaintKeyPrefix  = "crusoe.ai/"
-	InstanceGroupIDLabel   = "crusoe.ai/instance.group.id"
+	TaintLabelPrefix        = "crusoe.ai/taint."
+	ManagedTaintKeyPrefix   = "crusoe.ai/"
+	NodePoolIDLabel         = "crusoe.ai/nodepool.id"
 	NodeTaintControllerName = "node-taint-controller"
 )
 
@@ -37,7 +37,7 @@ type NodeTaintController struct {
 	clusterID  string
 	syncPeriod time.Duration
 
-	// Cache of instance group ID -> desired taints, refreshed each sync.
+	// Cache of nodepool ID -> desired taints, refreshed each sync.
 	nodepoolTaints sync.Map
 }
 
@@ -91,12 +91,12 @@ func (c *NodeTaintController) syncTaints(ctx context.Context) {
 		return
 	}
 
-	// Step 2: Parse node_labels with crusoe.ai/taint. prefix into taints and cache them
+	// Step 2: Parse node_labels with crusoe.ai/taint. prefix into taints and cache them by nodepool ID
 	for _, np := range nodepools {
 		taints := parseTaintsFromLabels(np.NodeLabels)
-		c.nodepoolTaints.Store(np.InstanceGroupID, taints)
-		klog.V(4).Infof("Cached %d taints for nodepool %s (instance group %s)",
-			len(taints), np.Name, np.InstanceGroupID)
+		c.nodepoolTaints.Store(np.ID, taints)
+		klog.V(4).Infof("Cached %d taints for nodepool %s (ID: %s)",
+			len(taints), np.Name, np.ID)
 	}
 
 	// Step 3: List all Kubernetes nodes
@@ -116,15 +116,15 @@ func (c *NodeTaintController) syncTaints(ctx context.Context) {
 
 // reconcileNodeTaints ensures the node has the correct taints based on its nodepool.
 func (c *NodeTaintController) reconcileNodeTaints(ctx context.Context, node *v1.Node) error {
-	instanceGroupID := node.Labels[InstanceGroupIDLabel]
-	if instanceGroupID == "" {
-		klog.V(4).Infof("Node %s has no instance group ID label, skipping", node.Name)
+	nodepoolID := node.Labels[NodePoolIDLabel]
+	if nodepoolID == "" {
+		klog.V(4).Infof("Node %s has no nodepool ID label, skipping", node.Name)
 		return nil
 	}
 
 	// Get desired taints for this nodepool
 	var desiredTaints []v1.Taint
-	if cached, ok := c.nodepoolTaints.Load(instanceGroupID); ok {
+	if cached, ok := c.nodepoolTaints.Load(nodepoolID); ok {
 		desiredTaints = cached.([]v1.Taint)
 	}
 
