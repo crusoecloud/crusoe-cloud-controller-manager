@@ -9,9 +9,13 @@ linters-settings:
     # default is false: such cases aren't reported by default.
     check-blank: true
   govet:
-    check-shadowing: true
+    enable:
+      - shadow
   gci:
-    local-prefixes: gitlab.com/crusoeenergy
+    sections:
+      - standard
+      - default
+      - prefix(gitlab.com/crusoeenergy)
   gocritic:
     enabled-tags:
       - diagnostic
@@ -23,9 +27,7 @@ linters-settings:
       - commentedOutCode
   whitespace:
     multi-if: true # Enforces newlines (or comments) after every multi-line if statement
-  gosec:
-    global:
-      audit: enabled # Run extra checks that might be "nosy"
+  gosec: {}
   gomoddirectives:
     replace-allow-list:
       - github.com/crusoecloud/client-go
@@ -106,7 +108,3 @@ run:
   # include test  files or not
   tests: true
 
-# golangci.com configuration
-# https://github.com/golangci/golangci/wiki/Configuration
-service:
-  golangci-lint-version: 1.50.1 # use a fixed version for consistent results
