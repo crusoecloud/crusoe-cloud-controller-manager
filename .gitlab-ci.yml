@@ -41,8 +41,7 @@ sync_version_branches:
   - job: test_and_lint
     artifacts: true
   rules:
-    # - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   variables:
     GIT_DEPTH: 0  # full history required for rebase
   script:
