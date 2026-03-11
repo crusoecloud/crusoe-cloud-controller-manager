@@ -27,6 +27,18 @@ build_and_push:
     - docker push $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}"
 
 sync_version_branches:
+  # Same as build_and_push
+  needs:
+  - - job: code_intelligence
+      optional: true
+    - job: analyze
+      optional: true
+    - job: validate_charts
+      optional: true
+    - job: kubesec-sast
+      optional: true
+  - job: test_and_lint
+    artifacts: true
   rules:
     # - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_MERGE_REQUEST_ID'
@@ -43,10 +55,11 @@ sync_version_branches:
       failed=""
       for branch in release-0.31 release-0.32 release-0.33; do
         git checkout "$branch" || { failed="$failed $branch(checkout)"; continue; }
-        if git rebase origin/main; then
-          git push --force-with-lease origin "$branch" || failed="$failed $branch(push)"
+
+        if git merge origin/${CI_DEFAULT_BRANCH} --no-ff -m "chore: sync from main into $branch"; then
+          git push origin "$branch" || failed="$failed $branch(push)"
         else
-          git rebase --abort
+          git merge --abort
           failed="$failed $branch(conflict)"
         fi
       done
