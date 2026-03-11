@@ -26,6 +26,34 @@ build_and_push:
     - docker build --no-cache --pull -f "${DOCKERFILE:-./Dockerfile}" --build-arg CI_SERVER_HOST="$CI_SERVER_HOST" --build-arg CI_JOB_TOKEN="$CI_JOB_TOKEN" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME="$CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_VERSION="$CI_COMMIT_REF_NAME" -t $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}" .
     - docker push $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}"
 
+sync_version_branches:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  variables:
+    GIT_DEPTH: 0  # full history required for rebase
+  script:
+    - git config user.email "ci@crusoe.ai"
+    - git config user.name "GitLab CI"
+    # GITLAB_PUSH_TOKEN must be set as a CI/CD variable: a project access token
+    # with write_repository scope (Settings > Access Tokens)
+    - git remote set-url origin "https://oauth2:${GITLAB_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - git fetch origin
+    - |-
+      failed=""
+      for branch in k8s-0.32 k8s-0.33; do
+        git checkout "$branch" || { failed="$failed $branch(checkout)"; continue; }
+        if git rebase origin/main; then
+          git push --force-with-lease origin "$branch" || failed="$failed $branch(push)"
+        else
+          git rebase --abort
+          failed="$failed $branch(conflict)"
+        fi
+      done
+      if [ -n "$failed" ]; then
+        echo "ERROR: failed branches:$failed"
+        exit 1
+      fi
+
 # Remove the tag_semver and pages jobs from merges into main.
 # The tag_semver job will be run using a GitHub action instead
 # and new versions will be pushed then.
