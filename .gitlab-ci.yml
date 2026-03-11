@@ -7,7 +7,7 @@ variables:
 
 test_and_lint:
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "release"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH =~ /^release/'
       changes: !reference [.code-changes, changes]
     - if: '$CI_MERGE_REQUEST_ID'
       changes: !reference [.code-changes, changes]
@@ -40,7 +40,7 @@ sync_version_branches:
     - git fetch origin
     - |-
       failed=""
-      for branch in k8s-0.32 k8s-0.33; do
+      for branch in release-0.31 release-0.32 release-0.33; do
         git checkout "$branch" || { failed="$failed $branch(checkout)"; continue; }
         if git rebase origin/main; then
           git push --force-with-lease origin "$branch" || failed="$failed $branch(push)"
