@@ -1,0 +1,3 @@
+# When rebasing/merging from main, always keep our version-specific files
+go.mod merge=ours
+go.sum merge=ours
