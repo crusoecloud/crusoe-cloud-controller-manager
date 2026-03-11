@@ -21,9 +21,10 @@ build_and_push:
         cd ${SUBPROJECT_REL_PATH}
       fi
     - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN registry.gitlab.com
+    - GO_VERSION=$(awk '/^go /{print $2}' go.mod)
     # Build an image based on the commit ref, this will be available
     # internally for testing feature branches and testing pre-release versions
-    - docker build --no-cache --pull -f "${DOCKERFILE:-./Dockerfile}" --build-arg CI_SERVER_HOST="$CI_SERVER_HOST" --build-arg CI_JOB_TOKEN="$CI_JOB_TOKEN" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME="$CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_VERSION="$CI_COMMIT_REF_NAME" -t $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}" .
+    - docker build --no-cache --pull -f "${DOCKERFILE:-./Dockerfile}" --build-arg CI_SERVER_HOST="$CI_SERVER_HOST" --build-arg CI_JOB_TOKEN="$CI_JOB_TOKEN" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME="$CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_VERSION="$CI_COMMIT_REF_NAME" --build-arg GO_VERSION="$GO_VERSION" -t $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}" .
     - docker push $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}"
 
 sync_version_branches:

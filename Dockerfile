@@ -2,7 +2,8 @@
 # STEP 1: build crusoe-cloud-controller-manager binary #
 ##########################################
 
-FROM golang:1.22.9 AS builder
+ARG GO_VERSION=1.22.9
+FROM golang:${GO_VERSION} AS builder
 
 ARG CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME
 ENV CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME=$CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME
