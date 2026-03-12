@@ -4,6 +4,10 @@ include:
 
 variables:
   CI_IMAGE: registry.gitlab.com/crusoeenergy/tools/go-ci-1.22
+  # Single source of truth for active release branches.
+  # Update this variable (and create the branch) when adding a new K8s version.
+  # Both dry_run_sync and sync_version_branches read from this.
+  RELEASE_BRANCHES: "release-0.31 release-0.32 release-0.33"
 
 test_and_lint:
   rules:
@@ -24,11 +28,12 @@ build_and_push:
     - GO_VERSION=$(awk '/^go /{print $2}' go.mod)
     # Build an image based on the commit ref, this will be available
     # internally for testing feature branches and testing pre-release versions
+    - GO_VERSION=$(awk '/^go /{print $2}' go.mod)
     - docker build --no-cache --pull -f "${DOCKERFILE:-./Dockerfile}" --build-arg CI_SERVER_HOST="$CI_SERVER_HOST" --build-arg CI_JOB_TOKEN="$CI_JOB_TOKEN" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME="$CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME" --build-arg CRUSOE_CLOUD_CONTROLLER_MANAGER_VERSION="$CI_COMMIT_REF_NAME" --build-arg GO_VERSION="$GO_VERSION" -t $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}" .
     - docker push $RELEASE_IMAGE:"${CI_COMMIT_REF_NAME##*/}"
 
 sync_version_branches:
-  # Same as build_and_push
+  # same time as build_and_push
   needs:
   - - job: code_intelligence
       optional: true
@@ -43,7 +48,7 @@ sync_version_branches:
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   variables:
-    GIT_DEPTH: 0  # full history required for rebase
+    GIT_DEPTH: 0  # full history required for merge
   script:
     - git config user.email "ci@crusoe.ai"
     - git config user.name "GitLab CI"
@@ -53,7 +58,7 @@ sync_version_branches:
     - git fetch origin
     - |-
       failed=""
-      for branch in release-0.31 release-0.32 release-0.33; do
+      for branch in $RELEASE_BRANCHES; do
         git checkout "$branch" || { failed="$failed $branch(checkout)"; continue; }
 
         if git merge origin/${CI_DEFAULT_BRANCH} --no-ff -m "chore: sync from main into $branch"; then
@@ -67,6 +72,38 @@ sync_version_branches:
         echo "ERROR: failed branches:$failed"
         exit 1
       fi
+
+# Simulates what sync_version_branches will do on merge to main.
+# Runs on every MR targeting main so developers catch merge conflicts and
+# make ci failures BEFORE their changes land and trigger the real sync.
+#
+# Does NOT require GITLAB_PUSH_TOKEN — all git operations are local,
+# nothing is ever pushed.
+dry_run_sync:
+  # same time as build_and_push
+  needs:
+  - - job: code_intelligence
+      optional: true
+    - job: analyze
+      optional: true
+    - job: validate_charts
+      optional: true
+    - job: kubesec-sast
+      optional: true
+  - job: test_and_lint
+    artifacts: true
+  rules:
+    # Only run on MRs targeting main — not on main itself (sync_version_branches handles that)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH'
+  variables:
+    GIT_DEPTH: 0         # Full history needed — same as sync_version_branches
+    GIT_STRATEGY: clone  # Clean clone so branch switching works reliably
+  before_script:
+    # Mirror .private-repo-script from template so `go get` can reach private modules
+    - go env -w "GOPRIVATE=${CI_SERVER_HOST}"
+    - echo -e "machine ${CI_SERVER_HOST} login gitlab-ci-token password ${CI_JOB_TOKEN}" > "${HOME}/.netrc"
+  script:
+    - bash scripts/dry_run_sync.sh
 
 # Remove the tag_semver and pages jobs from merges into main.
 # The tag_semver job will be run using a GitHub action instead
