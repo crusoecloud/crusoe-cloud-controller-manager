@@ -2,7 +2,7 @@
 set -e
 
 MAJOR_VERSION=$1
-MINOR_VERSION=$2
+MINOR_VERSION=$2 # Not used, but kept for backward compatibility
 TAG_PREFIX=$3
 
 # Extract client-go version from go.mod
@@ -12,16 +12,16 @@ CLIENT_GO_MINOR=$(echo "$CLIENT_GO_VERSION" | cut -d. -f2)
 echo "Detected client-go version: $CLIENT_GO_VERSION (minor: $CLIENT_GO_MINOR)"
 
 # find the latest tag
-NEW_VERSION="${TAG_PREFIX}v${MAJOR_VERSION}.${MINOR_VERSION}.0-k8s${CLIENT_GO_MINOR}"
+NEW_VERSION="${TAG_PREFIX}v${MAJOR_VERSION}.${CLIENT_GO_MINOR}.0"
 git fetch -q --tags --prune --prune-tags
-tags=$(git tag -l ${TAG_PREFIX}v${MAJOR_VERSION}.${MINOR_VERSION}.*-k8s${CLIENT_GO_MINOR} --sort=-version:refname)
+tags=$(git tag -l ${TAG_PREFIX}v${MAJOR_VERSION}.${CLIENT_GO_MINOR}.* --sort=-version:refname)
 if [[ ! -z "$tags" ]]; then
   arr=(${tags})
   for val in ${arr[@]}; do
-    if [[ "$val" =~ ^${TAG_PREFIX}v${MAJOR_VERSION}+\.${MINOR_VERSION}\.[0-9]+-k8s${CLIENT_GO_MINOR}$ ]]; then
-      prev_build=$(echo ${val} | cut -d. -f3 | cut -d- -f1)
+    if [[ "$val" =~ ^${TAG_PREFIX}v${MAJOR_VERSION}\.${CLIENT_GO_MINOR}\.[0-9]+$ ]]; then
+      prev_build=$(echo ${val} | cut -d. -f3)
       new_build=$((prev_build+1))
-      NEW_VERSION="${TAG_PREFIX}v${MAJOR_VERSION}.${MINOR_VERSION}.${new_build}-k8s${CLIENT_GO_MINOR}"
+      NEW_VERSION="${TAG_PREFIX}v${MAJOR_VERSION}.${CLIENT_GO_MINOR}.${new_build}"
       break
     fi
   done
