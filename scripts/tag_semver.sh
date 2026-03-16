@@ -1,31 +1,33 @@
 #!/usr/bin/env bash
 set -e
 
-MAJOR_VERSION=$1
-MINOR_VERSION=$2 # Not used, but kept for backward compatibility
-TAG_PREFIX=$3
+# MAJOR_VERSION=$1
+# MINOR_VERSION=$2 # Not used, but kept for backward compatibility
+# TAG_PREFIX=$3
 
-# Extract client-go version from go.mod
-CLIENT_GO_VERSION=$(grep "k8s.io/client-go" go.mod | head -1 | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/v//')
-CLIENT_GO_MINOR=$(echo "$CLIENT_GO_VERSION" | cut -d. -f2)
+# # Extract client-go version from go.mod
+# CLIENT_GO_VERSION=$(grep "k8s.io/client-go" go.mod | head -1 | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/v//')
+# CLIENT_GO_MINOR=$(echo "$CLIENT_GO_VERSION" | cut -d. -f2)
 
-echo "Detected client-go version: $CLIENT_GO_VERSION (minor: $CLIENT_GO_MINOR)"
+# echo "Detected client-go version: $CLIENT_GO_VERSION (minor: $CLIENT_GO_MINOR)"
 
-# find the latest tag
-NEW_VERSION="${TAG_PREFIX}v${MAJOR_VERSION}.${CLIENT_GO_MINOR}.0"
-git fetch -q --tags --prune --prune-tags
-tags=$(git tag -l ${TAG_PREFIX}v${MAJOR_VERSION}.${CLIENT_GO_MINOR}.* --sort=-version:refname)
-if [[ ! -z "$tags" ]]; then
-  arr=(${tags})
-  for val in ${arr[@]}; do
-    if [[ "$val" =~ ^${TAG_PREFIX}v${MAJOR_VERSION}\.${CLIENT_GO_MINOR}\.[0-9]+$ ]]; then
-      prev_build=$(echo ${val} | cut -d. -f3)
-      new_build=$((prev_build+1))
-      NEW_VERSION="${TAG_PREFIX}v${MAJOR_VERSION}.${CLIENT_GO_MINOR}.${new_build}"
-      break
-    fi
-  done
-fi
+# # find the latest tag
+# NEW_VERSION="${TAG_PREFIX}v${MAJOR_VERSION}.${CLIENT_GO_MINOR}.0"
+# git fetch -q --tags --prune --prune-tags
+# tags=$(git tag -l ${TAG_PREFIX}v${MAJOR_VERSION}.${CLIENT_GO_MINOR}.* --sort=-version:refname)
+# if [[ ! -z "$tags" ]]; then
+#   arr=(${tags})
+#   for val in ${arr[@]}; do
+#     if [[ "$val" =~ ^${TAG_PREFIX}v${MAJOR_VERSION}\.${CLIENT_GO_MINOR}\.[0-9]+$ ]]; then
+#       prev_build=$(echo ${val} | cut -d. -f3)
+#       new_build=$((prev_build+1))
+#       NEW_VERSION="${TAG_PREFIX}v${MAJOR_VERSION}.${CLIENT_GO_MINOR}.${new_build}"
+#       break
+#     fi
+#   done
+# fi
+NEW_VERSION="v0.32.0"
+
 
 echo "Version for this commit: ${NEW_VERSION}"
 echo "RELEASE_VERSION=${NEW_VERSION}" >> variables.env
