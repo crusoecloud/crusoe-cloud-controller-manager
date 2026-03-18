@@ -27,7 +27,10 @@ linters-settings:
       - commentedOutCode
   whitespace:
     multi-if: true # Enforces newlines (or comments) after every multi-line if statement
-  gosec: {}
+  gosec:
+    config:
+      global:
+        audit: true
   gomoddirectives:
     replace-allow-list:
       - github.com/crusoecloud/client-go
