@@ -36,6 +36,20 @@ var ShutdownTaint = &v1.Taint{
 	Effect: v1.TaintEffectNoSchedule,
 }
 
+// OutOfServiceTaint marks a node whose instance is shut down as gone for good.
+// ShutdownTaint above is NoSchedule, so it only keeps new pods off the node. Pods
+// already running there stay in Terminating forever, because confirming their
+// deletion needs a kubelet that is no longer there. This taint tells the pod GC
+// controller to force-delete them and the attach/detach controller to force-detach
+// their volumes, which is what lets a StatefulSet pod move to a healthy node.
+//
+//nolint:gochecknoglobals // can't construct const structs
+var OutOfServiceTaint = &v1.Taint{
+	Key:    v1.TaintNodeOutOfService,
+	Value:  "nodeshutdown",
+	Effect: v1.TaintEffectNoExecute,
+}
+
 var ErrInstancesNotSupported = errors.New("cloud provider does not support instances")
 
 var (
@@ -146,6 +160,12 @@ func (c *CloudNodeLifecycleController) MonitorNodes(ctx context.Context) {
 				klog.Errorf("error patching node taints: %v", err)
 			}
 
+			// The node is back. Leaving the out-of-service taint on would evict every
+			// pod that lands on it from here on.
+			if err := cloudnodeutil.RemoveTaintOffNode(c.kubeClient, node.Name, node, OutOfServiceTaint); err != nil {
+				klog.Errorf("error removing out-of-service taint from node %s: %v", node.Name, err)
+			}
+
 			continue
 		}
 
@@ -196,6 +216,13 @@ func (c *CloudNodeLifecycleController) MonitorNodes(ctx context.Context) {
 				err = cloudnodeutil.AddOrUpdateTaintOnNode(c.kubeClient, node.Name, ShutdownTaint)
 				if err != nil {
 					klog.Errorf("failed to apply shutdown taint to node %s, it may have been deleted.", node.Name)
+				}
+
+				// The instance is stopped, so no kubelet will ever confirm a pod deletion
+				// or release a volume on this node. Mark it out of service so the pods can
+				// be force-deleted and their volumes detached.
+				if err := cloudnodeutil.AddOrUpdateTaintOnNode(c.kubeClient, node.Name, OutOfServiceTaint); err != nil {
+					klog.Errorf("failed to apply out-of-service taint to node %s: %v", node.Name, err)
 				}
 			}
 		}
