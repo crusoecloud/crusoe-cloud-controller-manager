@@ -135,9 +135,9 @@ func (c *CloudNodeLifecycleController) Run(ctx context.Context,
 
 // MonitorNodes checks to see if nodes in the cluster have been deleted
 // or shutdown. If deleted, it deletes the node resource. If shutdown it
-// applies a shutdown taint to the node.
+// taints the node shutdown and out-of-service.
 //
-//nolint:funlen,cyclop // copied from upstream
+//nolint:cyclop // copied from upstream
 func (c *CloudNodeLifecycleController) MonitorNodes(ctx context.Context) {
 	nodes, err := c.nodeLister.List(labels.Everything())
 	if err != nil {
@@ -155,16 +155,7 @@ func (c *CloudNodeLifecycleController) MonitorNodes(ctx context.Context) {
 
 		if status == v1.ConditionTrue {
 			// if taint exist remove taint
-			err = cloudnodeutil.RemoveTaintOffNode(c.kubeClient, node.Name, node, ShutdownTaint)
-			if err != nil {
-				klog.Errorf("error patching node taints: %v", err)
-			}
-
-			// The node is back. Leaving the out-of-service taint on would evict every
-			// pod that lands on it from here on.
-			if err := cloudnodeutil.RemoveTaintOffNode(c.kubeClient, node.Name, node, OutOfServiceTaint); err != nil {
-				klog.Errorf("error removing out-of-service taint from node %s: %v", node.Name, err)
-			}
+			c.clearShutdownTaints(node)
 
 			continue
 		}
@@ -212,20 +203,36 @@ func (c *CloudNodeLifecycleController) MonitorNodes(ctx context.Context) {
 			}
 
 			if shutdown && err == nil {
-				// if node is shutdown add shutdown taint
-				err = cloudnodeutil.AddOrUpdateTaintOnNode(c.kubeClient, node.Name, ShutdownTaint)
-				if err != nil {
-					klog.Errorf("failed to apply shutdown taint to node %s, it may have been deleted.", node.Name)
-				}
-
-				// The instance is stopped, so no kubelet will ever confirm a pod deletion
-				// or release a volume on this node. Mark it out of service so the pods can
-				// be force-deleted and their volumes detached.
-				if err := cloudnodeutil.AddOrUpdateTaintOnNode(c.kubeClient, node.Name, OutOfServiceTaint); err != nil {
-					klog.Errorf("failed to apply out-of-service taint to node %s: %v", node.Name, err)
-				}
+				c.applyShutdownTaints(node.Name)
 			}
 		}
+	}
+}
+
+// applyShutdownTaints taints a node whose instance is shut down. The shutdown taint
+// is NoSchedule and only keeps new pods away; out-of-service is what lets the pods
+// already on the node be force-deleted and their volumes detached, since no kubelet
+// is left to confirm a deletion or release a volume.
+func (c *CloudNodeLifecycleController) applyShutdownTaints(nodeName string) {
+	if err := cloudnodeutil.AddOrUpdateTaintOnNode(c.kubeClient, nodeName, ShutdownTaint); err != nil {
+		klog.Errorf("failed to apply shutdown taint to node %s, it may have been deleted.", nodeName)
+	}
+
+	if err := cloudnodeutil.AddOrUpdateTaintOnNode(c.kubeClient, nodeName, OutOfServiceTaint); err != nil {
+		klog.Errorf("failed to apply out-of-service taint to node %s: %v", nodeName, err)
+	}
+}
+
+// clearShutdownTaints removes both taints once the node reports Ready again. Removing
+// out-of-service is not optional: left in place it evicts every pod that later lands
+// on the node.
+func (c *CloudNodeLifecycleController) clearShutdownTaints(node *v1.Node) {
+	if err := cloudnodeutil.RemoveTaintOffNode(c.kubeClient, node.Name, node, ShutdownTaint); err != nil {
+		klog.Errorf("error patching node taints: %v", err)
+	}
+
+	if err := cloudnodeutil.RemoveTaintOffNode(c.kubeClient, node.Name, node, OutOfServiceTaint); err != nil {
+		klog.Errorf("error removing out-of-service taint from node %s: %v", node.Name, err)
 	}
 }
 
