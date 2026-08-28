@@ -70,10 +70,14 @@ type RouteController struct {
 }
 
 // nodeState is soft state; everything durable lives on the Node (labels) or in
-// SDN (List APIs). It is rebuilt on restart. Fields beyond nicID are added by
-// the reconcile-state-machine commit that uses them.
+// SDN (List APIs). It is rebuilt on restart.
 type nodeState struct {
-	nicID string // immutable per instance once resolved
+	nicID           string    // immutable per instance once resolved
+	allocationID    string    // "" until known (from op result or List)
+	createStart     time.Time // for crusoe_pod_cidr_allocation_provision_seconds
+	ready           bool      // condition set + final patch applied
+	warnedMultiCIDR bool
+	conflictSince   time.Time // first ErrDestinationConflict; zero if none (event dedup)
 }
 
 // NewRouteController wires the controller. Clients and informers are supplied by

@@ -2,11 +2,19 @@ package routes
 
 import (
 	"context"
+	"time"
 
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes/sdn"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	clientset "k8s.io/client-go/kubernetes"
+	corev1listers "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 )
 
 // This file exposes unexported symbols to the external routes_test package so
@@ -84,3 +92,82 @@ func MetaName(obj any) (string, bool) { return metaName(obj) }
 
 // MaxOpMisses exposes the drop threshold to tests.
 const MaxOpMisses = maxOpMisses
+
+// ReconcileHarness wraps a RouteController wired to fake clients and
+// indexer-backed listers for driving reconcile()/reapOnce() directly (no
+// informers).
+type ReconcileHarness struct {
+	Controller    *RouteController
+	ciliumIndexer cache.Indexer
+	nodeIndexer   cache.Indexer
+}
+
+// NewReconcileHarness builds a ReconcileHarness.
+func NewReconcileHarness(
+	cfg *Config,
+	kubeClient clientset.Interface,
+	sdnClient sdn.PodCIDRAllocationClient,
+	apiClient client.APIClient,
+) *ReconcileHarness {
+	ciliumIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	nodeIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+
+	c := &RouteController{
+		cfg:        cfg,
+		kubeClient: kubeClient,
+		sdn:        sdnClient,
+		apiClient:  apiClient,
+		ciliumNodeLister: cache.NewGenericLister(
+			ciliumIndexer, schema.GroupResource{Group: "cilium.io", Resource: "ciliumnodes"}),
+		nodeLister: corev1listers.NewNodeLister(nodeIndexer),
+		queue:      workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		tracker:    newOpTracker(),
+		recorder:   record.NewFakeRecorder(recorderBuffer),
+		state:      make(map[string]*nodeState),
+	}
+
+	return &ReconcileHarness{Controller: c, ciliumIndexer: ciliumIndexer, nodeIndexer: nodeIndexer}
+}
+
+const recorderBuffer = 64
+
+// Reconcile drives reconcile for a node.
+func (h *ReconcileHarness) Reconcile(ctx context.Context, nodeName string) (time.Duration, error) {
+	return h.Controller.reconcile(ctx, nodeName)
+}
+
+// ReapOnce drives one reaper pass.
+func (h *ReconcileHarness) ReapOnce(ctx context.Context) { h.Controller.reapOnce(ctx) }
+
+// Tracker exposes the opTracker.
+func (h *ReconcileHarness) Tracker() *OpTracker { return h.Controller.tracker }
+
+// PollOpsOnce drives one poll-loop tick.
+func (h *ReconcileHarness) PollOpsOnce(ctx context.Context) { h.Controller.pollOpsOnce(ctx) }
+
+// AddCiliumNode inserts an unstructured CiliumNode into the test lister.
+func (h *ReconcileHarness) AddCiliumNode(u *unstructured.Unstructured) error {
+	return h.ciliumIndexer.Add(u) //nolint:wrapcheck // test helper
+}
+
+// DeleteCiliumNode removes a CiliumNode from the test lister.
+func (h *ReconcileHarness) DeleteCiliumNode(u *unstructured.Unstructured) error {
+	return h.ciliumIndexer.Delete(u) //nolint:wrapcheck // test helper
+}
+
+// AddNode inserts a Node into the test lister.
+func (h *ReconcileHarness) AddNode(node *v1.Node) error {
+	return h.nodeIndexer.Add(node) //nolint:wrapcheck // test helper
+}
+
+// SyncNodeFromClient refreshes the node lister's copy from the fake clientset,
+// emulating what the informer does after a patch. Tests call this between
+// reconcile steps.
+func (h *ReconcileHarness) SyncNodeFromClient(ctx context.Context, name string) error {
+	node, err := h.Controller.kubeClient.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err //nolint:wrapcheck // test helper
+	}
+
+	return h.nodeIndexer.Update(node) //nolint:wrapcheck // test helper
+}
