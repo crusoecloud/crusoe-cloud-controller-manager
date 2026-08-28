@@ -160,6 +160,12 @@ func (h *ReconcileHarness) AddNode(node *v1.Node) error {
 	return h.nodeIndexer.Add(node) //nolint:wrapcheck // test helper
 }
 
+// NativeModeEnabled reports whether the loaded config would start the controller
+// (mirrors the register mode-gate), for fail-fast tests.
+func NativeModeEnabled(cfg *Config) bool {
+	return cfg.RoutingMode == RoutingModeNative
+}
+
 // SyncNodeFromClient refreshes the node lister's copy from the fake clientset,
 // emulating what the informer does after a patch. Tests call this between
 // reconcile steps.
