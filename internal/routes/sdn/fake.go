@@ -68,6 +68,16 @@ func NewLoggingFakeClient() *LoggingFakeClient {
 
 var _ PodCIDRAllocationClient = (*LoggingFakeClient)(nil)
 
+// SeedAllocation inserts a fully-formed allocation directly into the fake's
+// table, bypassing the async create op. It exists for tests that need control
+// over fields such as CreatedAt (e.g. exercising the reaper grace period).
+func (f *LoggingFakeClient) SeedAllocation(a *PodCIDRAllocation) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.allocs[a.ID] = *a
+}
+
 func (f *LoggingFakeClient) pendingPolls() int {
 	if f.PendingPolls > 0 {
 		return f.PendingPolls

@@ -797,8 +797,8 @@ Branch: `CRUSOE-97212-vpc-native-pod-routing` (commit-by-commit per §16).
 | 3 | `internal/routes`: CiliumNode conversion | done: 22bdbee |
 | 4 | `internal/routes`: NIC resolution + location sourcing (+ GetClusterByName, mock regen) | done: 92d6aa5 |
 | 5 | `internal/routes`: controller skeleton + opTracker + metrics | done: 280239e |
-| 6 | `internal/routes`: reconcile state machine + node patch helpers | done |
-| 7 | `internal/routes`: reaper | pending |
+| 6 | `internal/routes`: reconcile state machine + node patch helpers | done: bd5d443 |
+| 7 | `internal/routes`: reaper | done |
 | 8 | Wiring: register.go + main.go registration | pending |
 | 9 | Deployment manifest + docs | pending |
 
