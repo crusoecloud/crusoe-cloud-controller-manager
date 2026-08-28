@@ -765,7 +765,7 @@ Each commit builds, passes `make lint` and `make test` independently.
 6. **`internal/routes`: reconcile state machine + node patch helpers** — `reconcile.go`, `nodepatch.go` + the full test matrix (§15). Largest commit; the state machine lands whole because partial machines aren't meaningfully testable.
 7. **`internal/routes`: reaper** — `reaper.go` + tests (grace period, chunked batch delete), desired/actual gauges.
 8. **Wiring: `register.go` + `main.go` registration** — §6.2/§6.3; overlay-mode no-op log line; fail-fast tests for missing/partial native config.
-9. **Deployment manifest + docs** — new release yaml with env block and least-privilege RBAC (§14), README note for `CRUSOE_ROUTING_MODE`.
+9. **Docs** — README note for `CRUSOE_ROUTING_MODE` + implementation status. No release yaml: drop 1 is v2-only and the v2 CCM Deployment is rendered by **addon-controller** (MR 57), so env/RBAC manifests live there — §14's least-privilege rules are the input to that MR, not a file in this repo. (`releases/` is the v1/self-managed path, out of scope for drop 1.)
 
 ## 17. What Changes When the Real gRPC Client Lands
 
@@ -799,8 +799,8 @@ Branch: `CRUSOE-97212-vpc-native-pod-routing` (commit-by-commit per §16).
 | 5 | `internal/routes`: controller skeleton + opTracker + metrics | done: 280239e |
 | 6 | `internal/routes`: reconcile state machine + node patch helpers | done: bd5d443 |
 | 7 | `internal/routes`: reaper | done: c927cfe |
-| 8 | Wiring: register.go + main.go registration | done |
-| 9 | Deployment manifest + docs | pending |
+| 8 | Wiring: register.go + main.go registration | done: ce790e3 |
+| 9 | Docs (README + status; no release yaml — see §16.9) | done (this commit — self-referential sha) |
 
 ### Deviations from the design doc
 
@@ -809,4 +809,5 @@ Branch: `CRUSOE-97212-vpc-native-pod-routing` (commit-by-commit per §16).
 - **C1 (uuid dependency):** `github.com/google/uuid` was already in the module graph (indirect); using it in `fake.go` promoted it to a direct dependency via `go mod tidy`. No new module was added (per ground rule 3).
 - **C4 (ListClusters signature):** the design cites `KubernetesClustersApi.ListClusters(ctx, projectID)` (vendored v0.1.68). The module actually resolves to client-go **v0.1.128**, whose `ListClusters(ctx, projectID, *KubernetesClustersApiListClustersOpts)` adds a `ClusterName` server-side filter. `GetClusterByName` passes `ClusterName` as the opt and still filters the result by exact name defensively (list-and-filter behavior unchanged).
 - **C4 (struct ordering):** `RouteController`/`nodeState` are introduced in `controller.go` in this commit (only the `cfg`, `apiClient`, `mu`, `state`/`nicID` fields NIC resolution touches) so `nic.go` compiles standalone; the controller-skeleton commit fills in the remaining fields. Unexported helpers are added to `export_test.go` as they are needed so each commit passes the `unused` linter independently. `resolveNIC` and `resolveLocationFromCluster` are exercised through the mock `APIClient`; `internal/client/mock/client.go` gained `GetClusterByName` by hand (mockgen unavailable).
-- **C5 (reconcile/reaper stubs):** to keep the controller-skeleton commit building and lint-clean independently, `reconcile.go` and `reaper.go` land here as minimal stubs (`reconcile` returns `(0, nil)`; `reapOnce` is a no-op) that satisfy the worker-loop / goroutine wiring. Their full bodies land in commits 6 and 7 respectively. `nodeState` carries only `nicID` until commit 6 adds the fields the state machine uses (the `unused` linter forbids dead fields per commit). `podsUnroutableTaint` and `ciliumNodeGVR` globals are likewise introduced in the commit that first uses them (6 and 8).
+- **C5 (reconcile/reaper stubs):** to keep the controller-skeleton commit building and lint-clean independently, `reconcile.go` and `reaper.go` land here as minimal stubs (`reconcile` returns `(0, nil)`; `reapOnce` is a no-op) that satisfy the worker-loop / goroutine wiring. Their full bodies land in commits 6 and 7 respectively. `nodeState` carries only `nicID` until commit 6 adds the fields the state machine uses (the `unused` linter forbids dead fields per commit). `ciliumNodeGVR` is introduced in commit 8 (register.go) where `factory.ForResource` first uses it; the taint is applied via its key string in the patch helper, so no `podsUnroutableTaint` global was needed.
+- **C9 (no release manifest):** the originally planned `releases/.../v0.1.3.yaml` was dropped in review — drop 1 is v2-only and the v2 Deployment (env block + RBAC) is rendered by addon-controller (MR 57), so a manifest here would be unconsumed and could drift from the real template. §14 remains the least-privilege RBAC spec to carry into the addon-controller MR; a v1 reference manifest waits until v1 support is actually decided (RFC records it as an open exposure decision).
