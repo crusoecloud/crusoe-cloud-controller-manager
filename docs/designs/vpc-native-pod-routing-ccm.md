@@ -793,8 +793,8 @@ Branch: `CRUSOE-97212-vpc-native-pod-routing` (commit-by-commit per §16).
 | # | Commit | Status |
 |---|--------|--------|
 | 1 | `internal/routes/sdn`: types, PodCIDRAllocationClient interface, logging fake, gomock | done: a447785 |
-| 2 | `internal/routes`: config loading | done |
-| 3 | `internal/routes`: CiliumNode conversion | pending |
+| 2 | `internal/routes`: config loading | done: 88b7642 |
+| 3 | `internal/routes`: CiliumNode conversion | done |
 | 4 | `internal/routes`: NIC resolution + location sourcing (+ GetClusterByName, mock regen) | pending |
 | 5 | `internal/routes`: controller skeleton + opTracker + metrics | pending |
 | 6 | `internal/routes`: reconcile state machine + node patch helpers | pending |

@@ -1,0 +1,32 @@
+{
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumNode",
+  "metadata": {
+    "name": "sriprod1-worker-0",
+    "uid": "6f1c9b2a-1234-4c5d-8e9f-0a1b2c3d4e5f",
+    "resourceVersion": "482913",
+    "creationTimestamp": "2026-08-20T17:04:11Z",
+    "labels": {
+      "kubernetes.io/hostname": "sriprod1-worker-0"
+    }
+  },
+  "spec": {
+    "addresses": [
+      {
+        "type": "InternalIP",
+        "ip": "10.0.0.12"
+      }
+    ],
+    "ipam": {
+      "podCIDRs": [
+        "10.100.4.0/24"
+      ],
+      "pools": {}
+    }
+  },
+  "status": {
+    "ipam": {
+      "operator-status": {}
+    }
+  }
+}
