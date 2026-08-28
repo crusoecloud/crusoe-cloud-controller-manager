@@ -795,8 +795,8 @@ Branch: `CRUSOE-97212-vpc-native-pod-routing` (commit-by-commit per §16).
 | 1 | `internal/routes/sdn`: types, PodCIDRAllocationClient interface, logging fake, gomock | done: a447785 |
 | 2 | `internal/routes`: config loading | done: 88b7642 |
 | 3 | `internal/routes`: CiliumNode conversion | done: 22bdbee |
-| 4 | `internal/routes`: NIC resolution + location sourcing (+ GetClusterByName, mock regen) | done |
-| 5 | `internal/routes`: controller skeleton + opTracker + metrics | pending |
+| 4 | `internal/routes`: NIC resolution + location sourcing (+ GetClusterByName, mock regen) | done: 92d6aa5 |
+| 5 | `internal/routes`: controller skeleton + opTracker + metrics | done |
 | 6 | `internal/routes`: reconcile state machine + node patch helpers | pending |
 | 7 | `internal/routes`: reaper | pending |
 | 8 | Wiring: register.go + main.go registration | pending |
@@ -809,3 +809,4 @@ Branch: `CRUSOE-97212-vpc-native-pod-routing` (commit-by-commit per §16).
 - **C1 (uuid dependency):** `github.com/google/uuid` was already in the module graph (indirect); using it in `fake.go` promoted it to a direct dependency via `go mod tidy`. No new module was added (per ground rule 3).
 - **C4 (ListClusters signature):** the design cites `KubernetesClustersApi.ListClusters(ctx, projectID)` (vendored v0.1.68). The module actually resolves to client-go **v0.1.128**, whose `ListClusters(ctx, projectID, *KubernetesClustersApiListClustersOpts)` adds a `ClusterName` server-side filter. `GetClusterByName` passes `ClusterName` as the opt and still filters the result by exact name defensively (list-and-filter behavior unchanged).
 - **C4 (struct ordering):** `RouteController`/`nodeState` are introduced in `controller.go` in this commit (only the `cfg`, `apiClient`, `mu`, `state`/`nicID` fields NIC resolution touches) so `nic.go` compiles standalone; the controller-skeleton commit fills in the remaining fields. Unexported helpers are added to `export_test.go` as they are needed so each commit passes the `unused` linter independently. `resolveNIC` and `resolveLocationFromCluster` are exercised through the mock `APIClient`; `internal/client/mock/client.go` gained `GetClusterByName` by hand (mockgen unavailable).
+- **C5 (reconcile/reaper stubs):** to keep the controller-skeleton commit building and lint-clean independently, `reconcile.go` and `reaper.go` land here as minimal stubs (`reconcile` returns `(0, nil)`; `reapOnce` is a no-op) that satisfy the worker-loop / goroutine wiring. Their full bodies land in commits 6 and 7 respectively. `nodeState` carries only `nicID` until commit 6 adds the fields the state machine uses (the `unused` linter forbids dead fields per commit). `podsUnroutableTaint` and `ciliumNodeGVR` globals are likewise introduced in the commit that first uses them (6 and 8).

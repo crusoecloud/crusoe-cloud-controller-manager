@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes/sdn"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -57,3 +58,29 @@ func (c *RouteController) ProjectID() string {
 
 	return c.cfg.ProjectID
 }
+
+// OpTracker is the exported alias of the internal opTracker, for tests.
+type OpTracker = opTracker
+
+// NewOpTracker exposes newOpTracker to tests.
+func NewOpTracker() *OpTracker { return newOpTracker() }
+
+// RecordResults exposes recordResults to tests.
+func (t *OpTracker) RecordResults(ops []sdn.Operation, enqueue func(string)) {
+	t.recordResults(ops, enqueue)
+}
+
+// PendingIDs exposes pendingIDs to tests.
+func (t *OpTracker) PendingIDs() []string { return t.pendingIDs() }
+
+// TrackForTest exposes Track to tests (Track is already exported on the type).
+func (t *OpTracker) TrackForTest(opID, nodeKey string) { t.Track(opID, nodeKey) }
+
+// NodeNeedsWork exposes nodeNeedsWork to tests.
+func NodeNeedsWork(node *v1.Node) bool { return nodeNeedsWork(node) }
+
+// MetaName exposes metaName to tests.
+func MetaName(obj any) (string, bool) { return metaName(obj) }
+
+// MaxOpMisses exposes the drop threshold to tests.
+const MaxOpMisses = maxOpMisses
