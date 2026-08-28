@@ -36,6 +36,21 @@ func (m *MockApiClient) EXPECT() *MockApiClientMockRecorder {
 	return m.recorder
 }
 
+// GetClusterByName mocks base method.
+func (m *MockApiClient) GetClusterByName(ctx context.Context, projectID, name string) (*swagger.KubernetesCluster, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetClusterByName", ctx, projectID, name)
+	ret0, _ := ret[0].(*swagger.KubernetesCluster)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetClusterByName indicates an expected call of GetClusterByName.
+func (mr *MockApiClientMockRecorder) GetClusterByName(ctx, projectID, name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetClusterByName", reflect.TypeOf((*MockApiClient)(nil).GetClusterByName), ctx, projectID, name)
+}
+
 // GetIBNetwork mocks base method.
 func (m *MockApiClient) GetIBNetwork(ctx context.Context, projectID, ibPartitionID string) (*swagger.IbPartition, error) {
 	m.ctrl.T.Helper()

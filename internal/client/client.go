@@ -20,6 +20,7 @@ const (
 var (
 	ErrInstanceNotFound = errors.New("instance not found")
 	ErrProjectIDNotSet  = errors.New("CRUSOE_PROJECT_ID environment variable is not set")
+	ErrClusterNotFound  = errors.New("kubernetes cluster not found")
 )
 
 type APIClientImpl struct {
@@ -30,6 +31,7 @@ type APIClient interface {
 	GetInstanceByName(ctx context.Context, nodeName string) (*crusoeapi.InstanceV1Alpha5, error)
 	GetIBNetwork(ctx context.Context, projectID, ibPartitionID string) (*crusoeapi.IbPartition, error)
 	GetInstanceByID(ctx context.Context, instanceID string) (*crusoeapi.InstanceV1Alpha5, *http.Response, error)
+	GetClusterByName(ctx context.Context, projectID, name string) (*crusoeapi.KubernetesCluster, error)
 }
 
 func (a *APIClientImpl) GetInstanceByName(ctx context.Context, nodeName string,
@@ -99,4 +101,33 @@ func (a *APIClientImpl) GetInstanceByID(ctx context.Context,
 	}
 
 	return &instances.Items[0], response, nil
+}
+
+// GetClusterByName lists the Kubernetes clusters in the project and returns the
+// one whose Name matches (cluster names are unique per project). It follows the
+// list-and-filter pattern of GetInstanceByName because the ListClusters API has
+// no server-side name filter.
+func (a *APIClientImpl) GetClusterByName(ctx context.Context,
+	projectID, name string,
+) (*crusoeapi.KubernetesCluster, error) {
+	listOpts := &crusoeapi.KubernetesClustersApiListClustersOpts{
+		ClusterName: optional.NewString(name),
+	}
+	clusters, response, err := a.CrusoeAPIClient.KubernetesClustersApi.ListClusters(ctx, projectID, listOpts)
+	if response != nil {
+		defer response.Body.Close()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to list kubernetes clusters: %w", err)
+	}
+
+	// Filter defensively by exact name in case the server-side filter is a
+	// prefix/fuzzy match; cluster names are unique per project.
+	for i := range clusters.Items {
+		if clusters.Items[i].Name == name {
+			return &clusters.Items[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: %s", ErrClusterNotFound, name)
 }
