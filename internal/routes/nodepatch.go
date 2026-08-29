@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
@@ -51,7 +54,7 @@ func (c *RouteController) patchOpIDLabel(ctx context.Context, node *v1.Node, opI
 	}
 	newNode.Labels[OpIDLabel] = opID
 
-	return c.patchNodeMeta(ctx, node, newNode)
+	return c.strategicPatch(ctx, node.Name, node, newNode)
 }
 
 // clearOpIDLabel removes the OpIDLabel (create op FAILED path, C6).
@@ -62,7 +65,7 @@ func (c *RouteController) clearOpIDLabel(ctx context.Context, node *v1.Node) err
 	newNode := node.DeepCopy()
 	delete(newNode.Labels, OpIDLabel)
 
-	return c.patchNodeMeta(ctx, node, newNode)
+	return c.strategicPatch(ctx, node.Name, node, newNode)
 }
 
 // finalizeNode applies ONE Node patch (taint removal LAST) that simultaneously
@@ -87,59 +90,25 @@ func (c *RouteController) finalizeNode(ctx context.Context, node *v1.Node) error
 		return nil
 	}
 
-	return c.patchNodeFull(ctx, node, newNode)
+	return c.strategicPatch(ctx, node.Name, node, newNode)
 }
 
 // removeTaint strips the taint with the given key from the node's spec.
 func removeTaint(node *v1.Node, key string) {
-	if len(node.Spec.Taints) == 0 {
-		return
-	}
-	kept := make([]v1.Taint, 0, len(node.Spec.Taints))
-	for i := range node.Spec.Taints {
-		if node.Spec.Taints[i].Key != key {
-			kept = append(kept, node.Spec.Taints[i])
-		}
-	}
-	node.Spec.Taints = kept
+	node.Spec.Taints = slices.DeleteFunc(node.Spec.Taints, func(t v1.Taint) bool { return t.Key == key })
 }
 
 // nodesEqual reports whether the labels and taints of two nodes are equivalent
-// (the only fields finalizeNode changes).
+// (the only fields finalizeNode changes). Taints use Semantic.DeepEqual because
+// v1.Taint's TimeAdded is a *metav1.Time that DeepCopy clones to a fresh
+// pointer, so a plain == / slices.Equal would misreport unchanged taints.
 func nodesEqual(a, b *v1.Node) bool {
-	if len(a.Labels) != len(b.Labels) {
-		return false
-	}
-	for k, v := range a.Labels {
-		if b.Labels[k] != v {
-			return false
-		}
-	}
-	if len(a.Spec.Taints) != len(b.Spec.Taints) {
-		return false
-	}
-	for i := range a.Spec.Taints {
-		if a.Spec.Taints[i] != b.Spec.Taints[i] {
-			return false
-		}
-	}
-
-	return true
-}
-
-// patchNodeMeta issues a strategic-merge patch limited to metadata (labels).
-func (c *RouteController) patchNodeMeta(ctx context.Context, oldNode, newNode *v1.Node) error {
-	return c.strategicPatch(ctx, oldNode.Name, oldNode, newNode)
-}
-
-// patchNodeFull issues a strategic-merge patch spanning labels and spec.taints,
-// computed old->new the same way as cloud-provider's PatchNodeTaints (RV stripped
-// from the base so the patch does not carry a conflict check over .spec.taints).
-func (c *RouteController) patchNodeFull(ctx context.Context, oldNode, newNode *v1.Node) error {
-	return c.strategicPatch(ctx, oldNode.Name, oldNode, newNode)
+	return maps.Equal(a.Labels, b.Labels) && apiequality.Semantic.DeepEqual(a.Spec.Taints, b.Spec.Taints)
 }
 
 // strategicPatch computes and applies a two-way strategic merge patch old->new.
+// RV is stripped from the base so the patch does not carry a conflict check over
+// .spec.taints (mirrors cloud-provider's PatchNodeTaints).
 func (c *RouteController) strategicPatch(ctx context.Context, nodeName string, oldNode, newNode *v1.Node) error {
 	oldNoRV := oldNode.DeepCopy()
 	oldNoRV.ResourceVersion = ""

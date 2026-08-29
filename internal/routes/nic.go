@@ -156,13 +156,5 @@ func (c *RouteController) getState(nodeName string) *nodeState {
 
 // setNICID caches the resolved NIC id in the node's soft state.
 func (c *RouteController) setNICID(nodeName, nicID string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	st, ok := c.state[nodeName]
-	if !ok {
-		st = &nodeState{}
-		c.state[nodeName] = st
-	}
-	st.nicID = nicID
+	c.withState(nodeName, func(st *nodeState) { st.nicID = nicID })
 }

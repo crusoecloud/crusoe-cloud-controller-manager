@@ -2,6 +2,7 @@ package sdn
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -27,12 +28,10 @@ type fakeOp struct {
 	op        Operation
 	remaining int  // polls left before flipping terminal; <=0 means terminal
 	fail      bool // resolve FAILED (and roll back the mutation) at terminal
-	// createdIDs are allocation ids inserted by a create op, rolled back if it
-	// resolves FAILED.
-	createdIDs []string
-	// deleteIDs are allocation ids a delete op removes when it resolves
-	// SUCCEEDED.
-	deleteIDs []string
+	// ids are the allocation ids the op touches: a create's inserted rows (rolled
+	// back on FAILED) or a delete's target rows (removed on SUCCEEDED).
+	ids      []string
+	isDelete bool
 }
 
 // LoggingFakeClient is an in-memory PodCIDRAllocationClient that logs every
@@ -144,10 +143,10 @@ func (f *LoggingFakeClient) CreatePodCIDRAllocations(
 
 	fail := f.consumeFailNext()
 	f.ops[opID] = &fakeOp{
-		op:         Operation{OperationID: opID, State: OperationStateInProgress, AllocationIDs: []string{allocID}},
-		remaining:  f.pendingPolls(),
-		fail:       fail,
-		createdIDs: []string{allocID},
+		op:        Operation{OperationID: opID, State: OperationStateInProgress, AllocationIDs: []string{allocID}},
+		remaining: f.pendingPolls(),
+		fail:      fail,
+		ids:       []string{allocID},
 	}
 
 	return &Operation{OperationID: opID, State: OperationStateInProgress, AllocationIDs: []string{allocID}}, nil
@@ -182,7 +181,8 @@ func (f *LoggingFakeClient) DeletePodCIDRAllocations(
 		op:        Operation{OperationID: opID, State: OperationStateInProgress, AllocationIDs: req.IDs},
 		remaining: f.pendingPolls(),
 		fail:      fail,
-		deleteIDs: req.IDs,
+		ids:       req.IDs,
+		isDelete:  true,
 	}
 
 	return &Operation{OperationID: opID, State: OperationStateInProgress, AllocationIDs: req.IDs}, nil
@@ -256,16 +256,20 @@ func (f *LoggingFakeClient) advance(fo *fakeOp) {
 		fo.op.State = OperationStateFailed
 		fo.op.Error = "simulated OVN/DB failure"
 		// Roll back a failed create; retain rows for a failed delete.
-		for _, id := range fo.createdIDs {
-			delete(f.allocs, id)
+		if !fo.isDelete {
+			for _, id := range fo.ids {
+				delete(f.allocs, id)
+			}
 		}
 
 		return
 	}
 
 	fo.op.State = OperationStateSucceeded
-	for _, id := range fo.deleteIDs {
-		delete(f.allocs, id)
+	if fo.isDelete {
+		for _, id := range fo.ids {
+			delete(f.allocs, id)
+		}
 	}
 }
 
@@ -290,7 +294,7 @@ func hasBoundingFilter(q *ListPodCIDRAllocationsQuery) bool {
 
 //nolint:cyclop // flat intersection of independent optional filters
 func matchesQuery(a *PodCIDRAllocation, q *ListPodCIDRAllocationsQuery) bool {
-	if len(q.PodCIDRAllocationIDs) > 0 && !containsString(q.PodCIDRAllocationIDs, a.ID) {
+	if len(q.PodCIDRAllocationIDs) > 0 && !slices.Contains(q.PodCIDRAllocationIDs, a.ID) {
 		return false
 	}
 	if q.ProjectID != "" && a.Context.ProjectID != q.ProjectID {
@@ -302,7 +306,7 @@ func matchesQuery(a *PodCIDRAllocation, q *ListPodCIDRAllocationsQuery) bool {
 	if q.Location != "" && a.Context.Location != q.Location {
 		return false
 	}
-	if len(q.VPCPrefixReservationIDs) > 0 && !containsString(q.VPCPrefixReservationIDs, a.VPCPrefixReservationID) {
+	if len(q.VPCPrefixReservationIDs) > 0 && !slices.Contains(q.VPCPrefixReservationIDs, a.VPCPrefixReservationID) {
 		return false
 	}
 	if q.NetworkInterfaceID != "" && a.NetworkInterfaceID != q.NetworkInterfaceID {
@@ -316,35 +320,15 @@ func matchesQuery(a *PodCIDRAllocation, q *ListPodCIDRAllocationsQuery) bool {
 }
 
 func matchesOpQuery(op *Operation, q *ListPodCIDRAllocationOperationsQuery) bool {
-	if len(q.OperationIDs) > 0 && !containsString(q.OperationIDs, op.OperationID) {
+	if len(q.OperationIDs) > 0 && !slices.Contains(q.OperationIDs, op.OperationID) {
 		return false
 	}
-	if len(q.OperationStates) > 0 && !containsState(q.OperationStates, op.State) {
+	if len(q.OperationStates) > 0 && !slices.Contains(q.OperationStates, op.State) {
 		return false
 	}
-	if q.PodCIDRAllocationID != "" && !containsString(op.AllocationIDs, q.PodCIDRAllocationID) {
+	if q.PodCIDRAllocationID != "" && !slices.Contains(op.AllocationIDs, q.PodCIDRAllocationID) {
 		return false
 	}
 
 	return true
-}
-
-func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-
-	return false
-}
-
-func containsState(haystack []OperationState, needle OperationState) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-
-	return false
 }

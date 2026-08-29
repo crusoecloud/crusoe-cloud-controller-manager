@@ -9,6 +9,7 @@ import (
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes/sdn"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/klog/v2"
 )
 
@@ -83,22 +84,29 @@ func (c *RouteController) driveCreate(
 	}
 
 	// C7: no label — List before create (create may have succeeded pre-label).
+	return c.adoptOrCreate(ctx, nodeName, node, nicID, cidr)
+}
+
+// adoptOrCreate lists by destination cidr and either adopts a matching existing
+// allocation (finalize), reports a NIC conflict (C10), or creates a new one
+// (C8). Shared by driveCreate's C7 path and recoverFromList.
+func (c *RouteController) adoptOrCreate(
+	ctx context.Context, nodeName string, node *v1.Node, nicID, cidr string,
+) (time.Duration, error) {
 	alloc, found, err := c.lookupAllocation(ctx, cidr)
 	if err != nil {
 		return 0, err
 	}
-	if found {
-		if alloc.NetworkInterfaceID == nicID {
-			c.setAllocationID(nodeName, alloc.ID)
+	if !found {
+		return c.createAllocation(ctx, nodeName, node, nicID, cidr)
+	}
+	if alloc.NetworkInterfaceID == nicID {
+		c.setAllocationID(nodeName, alloc.ID)
 
-			return c.finalize(ctx, nodeName, node)
-		}
-
-		return c.handleConflict(nodeName, node) // C10
+		return c.finalize(ctx, nodeName, node)
 	}
 
-	// C8: create.
-	return c.createAllocation(ctx, nodeName, node, nicID, cidr)
+	return c.handleConflict(nodeName, node) // C10
 }
 
 // resumeOp implements C6: consume the tracker result, or fall back to List when
@@ -130,41 +138,26 @@ func (c *RouteController) resumeOp(
 	}
 }
 
-// recoverFromList handles a resumed op whose history is lost: List by
-// destination_cidr to decide adopt / conflict / recreate.
+// recoverFromList handles a resumed op whose history is lost: clear the stale
+// op-id label, then List by destination_cidr to decide adopt / conflict /
+// recreate. Clearing up front is end-state equivalent to the per-branch clears
+// it replaces: adopt's finalize clears the label, create re-patches it, and a
+// conflict leaves it cleared (C7's List re-finds the allocation on retry).
 func (c *RouteController) recoverFromList(
 	ctx context.Context, nodeName string, node *v1.Node, opID, cidr string,
 ) (time.Duration, error) {
 	c.tracker.Forget(opID)
 
-	alloc, found, err := c.lookupAllocation(ctx, cidr)
+	if err := c.clearOpIDIfNode(ctx, node); err != nil {
+		return 0, err
+	}
+
+	nicID, err := c.resolveNIC(ctx, nodeName, node)
 	if err != nil {
 		return 0, err
 	}
-	if !found {
-		if clearErr := c.clearOpIDIfNode(ctx, node); clearErr != nil {
-			return 0, clearErr
-		}
 
-		nicID, resolveErr := c.resolveNIC(ctx, nodeName, node)
-		if resolveErr != nil {
-			return 0, resolveErr
-		}
-
-		return c.createAllocation(ctx, nodeName, node, nicID, cidr)
-	}
-
-	nicID, resolveErr := c.resolveNIC(ctx, nodeName, node)
-	if resolveErr != nil {
-		return 0, resolveErr
-	}
-	if alloc.NetworkInterfaceID == nicID {
-		c.setAllocationID(nodeName, alloc.ID)
-
-		return c.finalize(ctx, nodeName, node)
-	}
-
-	return c.handleConflict(nodeName, node)
+	return c.adoptOrCreate(ctx, nodeName, node, nicID, cidr)
 }
 
 // onOpSucceeded records the allocation id, observes provision latency and
@@ -300,7 +293,7 @@ func (c *RouteController) fetchCiliumNode(nodeName string) (cn *ciliumNode, gone
 		return nil, false, fmt.Errorf("failed to get CiliumNode %s: %w", nodeName, getErr)
 	}
 
-	u, ok := asUnstructured(obj)
+	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return nil, false, fmt.Errorf("%w: %s", ErrNotCiliumNode, nodeName)
 	}

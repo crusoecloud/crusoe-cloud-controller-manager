@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	cloudcontrollermanager "github.com/crusoecloud/crusoe-cloud-controller-manager/internal"
 	auth "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/auth"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes/sdn"
@@ -22,12 +23,8 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// Env vars mirroring internal/cloud.go for constructing the Crusoe API client.
 const (
-	apiEndpointEnv = "CRUSOE_API_ENDPOINT"
-	accessKeyEnv   = "CRUSOE_ACCESS_KEY"
-	secretKeyEnv   = "CRUSOE_SECRET_KEY"
-	userAgent      = "crusoe-cloud-controller-manager/0.0.1"
+	userAgent = "crusoe-cloud-controller-manager/0.0.1"
 
 	informerResync = 30 * time.Minute
 )
@@ -123,7 +120,10 @@ func buildClients(
 // does (the cloud parameter does not expose its client).
 func buildAPIClient() client.APIClient {
 	cc := auth.NewCrusoeClient(
-		os.Getenv(apiEndpointEnv), os.Getenv(accessKeyEnv), os.Getenv(secretKeyEnv), userAgent)
+		os.Getenv(cloudcontrollermanager.APIEndpoint),
+		os.Getenv(cloudcontrollermanager.AccessKey),
+		os.Getenv(cloudcontrollermanager.SecretKey),
+		userAgent)
 
 	return &client.APIClientImpl{CrusoeAPIClient: cc}
 }

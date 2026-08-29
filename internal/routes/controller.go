@@ -23,6 +23,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	controllersmetrics "k8s.io/component-base/metrics/prometheus/controllers"
+	nodeutil "k8s.io/component-helpers/node/util"
 	"k8s.io/klog/v2"
 )
 
@@ -281,14 +282,9 @@ func nodeNeedsWork(node *v1.Node) bool {
 
 // hasNetworkAvailableCondition reports whether NetworkUnavailable=False is set.
 func hasNetworkAvailableCondition(node *v1.Node) bool {
-	for i := range node.Status.Conditions {
-		cond := node.Status.Conditions[i]
-		if cond.Type == v1.NodeNetworkUnavailable {
-			return cond.Status == v1.ConditionFalse
-		}
-	}
+	_, cond := nodeutil.GetNodeCondition(&node.Status, v1.NodeNetworkUnavailable)
 
-	return false
+	return cond != nil && cond.Status == v1.ConditionFalse
 }
 
 // metaName extracts a resource name from an informer object, tolerating

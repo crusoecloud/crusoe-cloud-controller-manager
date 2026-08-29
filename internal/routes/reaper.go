@@ -2,10 +2,12 @@ package routes
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes/sdn"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 )
@@ -46,11 +48,19 @@ func (c *RouteController) reapOnce(ctx context.Context) {
 	c.enqueueMissing(desired, actual)
 }
 
-// buildDesired maps destination_cidr -> nicID for every live CiliumNode with a
-// routed podCIDR. On a state-cache miss it resolves the NIC; a node whose NIC
-// cannot be resolved is skipped (never guessed).
-func (c *RouteController) buildDesired(ctx context.Context) map[string]string {
-	desired := make(map[string]string)
+// desiredEntry is the reaper's per-cidr desired state: the NIC that should hold
+// the allocation and the CiliumNode/Node name that routes it (for events).
+type desiredEntry struct {
+	nicID    string
+	nodeName string
+}
+
+// buildDesired maps destination_cidr -> desiredEntry for every live CiliumNode
+// with a routed podCIDR, in one walk of the lister. On a state-cache miss it
+// resolves the NIC; a node whose NIC cannot be resolved is skipped (never
+// guessed).
+func (c *RouteController) buildDesired(ctx context.Context) map[string]desiredEntry {
+	desired := make(map[string]desiredEntry)
 
 	objs, err := c.ciliumNodeLister.List(labels.Everything())
 	if err != nil {
@@ -60,7 +70,7 @@ func (c *RouteController) buildDesired(ctx context.Context) map[string]string {
 	}
 
 	for i := range objs {
-		u, ok := asUnstructured(objs[i])
+		u, ok := objs[i].(*unstructured.Unstructured)
 		if !ok {
 			continue
 		}
@@ -80,7 +90,7 @@ func (c *RouteController) buildDesired(ctx context.Context) map[string]string {
 
 			continue
 		}
-		desired[cn.PodCIDRs[0]] = nicID
+		desired[cn.PodCIDRs[0]] = desiredEntry{nicID: nicID, nodeName: cn.Name}
 	}
 
 	return desired
@@ -105,14 +115,14 @@ func (c *RouteController) desiredNICID(ctx context.Context, nodeName string) str
 // batches ids into chunks of at most maxDeleteChunk. For each deleted allocation
 // whose cidr maps to an existing Node it emits an event; otherwise klog only.
 func (c *RouteController) deleteOrphans(
-	ctx context.Context, desired map[string]string, actual []sdn.PodCIDRAllocation,
+	ctx context.Context, desired map[string]desiredEntry, actual []sdn.PodCIDRAllocation,
 ) {
 	now := time.Now()
 	candidates := make([]sdn.PodCIDRAllocation, 0, len(actual))
 	for i := range actual {
 		a := actual[i]
-		wantNIC, ok := desired[a.DestinationCIDR]
-		if ok && wantNIC == a.NetworkInterfaceID {
+		want, ok := desired[a.DestinationCIDR]
+		if ok && want.nicID == a.NetworkInterfaceID {
 			continue // matches desired
 		}
 		if now.Sub(a.CreatedAt) < c.cfg.ReaperGrace {
@@ -125,20 +135,16 @@ func (c *RouteController) deleteOrphans(
 		return
 	}
 
-	c.deleteInChunks(ctx, candidates)
+	c.deleteInChunks(ctx, desired, candidates)
 }
 
 // deleteInChunks batch-deletes candidate allocations in chunks of at most
 // maxDeleteChunk. A chunk-level NotFound aborts remaining chunks (next pass
 // re-lists).
-func (c *RouteController) deleteInChunks(ctx context.Context, candidates []sdn.PodCIDRAllocation) {
-	for start := 0; start < len(candidates); start += maxDeleteChunk {
-		end := start + maxDeleteChunk
-		if end > len(candidates) {
-			end = len(candidates)
-		}
-		chunk := candidates[start:end]
-
+func (c *RouteController) deleteInChunks(
+	ctx context.Context, desired map[string]desiredEntry, candidates []sdn.PodCIDRAllocation,
+) {
+	for chunk := range slices.Chunk(candidates, maxDeleteChunk) {
 		ids := make([]string, 0, len(chunk))
 		for i := range chunk {
 			ids = append(ids, chunk[i].ID)
@@ -157,88 +163,43 @@ func (c *RouteController) deleteInChunks(ctx context.Context, candidates []sdn.P
 		}
 
 		for i := range chunk {
-			c.reportDeletedAllocation(&chunk[i])
+			c.reportDeletedAllocation(desired, &chunk[i])
 		}
 	}
 }
 
-// reportDeletedAllocation emits an event on the owning Node when one exists
-// (NIC-mismatch case), else structured klog only.
-func (c *RouteController) reportDeletedAllocation(a *sdn.PodCIDRAllocation) {
-	node := c.nodeForCIDR(a.DestinationCIDR)
-	if node != nil {
-		c.eventf(node, v1.EventTypeNormal, reasonOrphanedAllocationDeleted,
-			"deleted stale pod CIDR allocation %s (cidr %s) held by another interface", a.ID, a.DestinationCIDR)
+// reportDeletedAllocation emits an event on the owning Node when its cidr is
+// still desired by a live CiliumNode (NIC-mismatch case), else structured klog
+// only (a true orphan whose CiliumNode is gone has no node to event on).
+func (c *RouteController) reportDeletedAllocation(desired map[string]desiredEntry, a *sdn.PodCIDRAllocation) {
+	if entry, ok := desired[a.DestinationCIDR]; ok {
+		if node := c.getNode(entry.nodeName); node != nil {
+			c.eventf(node, v1.EventTypeNormal, reasonOrphanedAllocationDeleted,
+				"deleted stale pod CIDR allocation %s (cidr %s) held by another interface", a.ID, a.DestinationCIDR)
 
-		return
+			return
+		}
 	}
 	klog.InfoS("reaper: deleted orphaned allocation",
 		"allocationID", a.ID, "cidr", a.DestinationCIDR, "nicID", a.NetworkInterfaceID)
 }
 
-// nodeForCIDR returns the Node whose CiliumNode routes the given cidr, or nil.
-func (c *RouteController) nodeForCIDR(cidr string) *v1.Node {
-	objs, err := c.ciliumNodeLister.List(labels.Everything())
-	if err != nil {
-		return nil
-	}
-	for i := range objs {
-		u, ok := asUnstructured(objs[i])
-		if !ok {
-			continue
-		}
-		cn, convErr := ciliumNodeFromUnstructured(u)
-		if convErr != nil || len(cn.PodCIDRs) == 0 || cn.PodCIDRs[0] != cidr {
-			continue
-		}
-
-		return c.getNode(cn.Name)
-	}
-
-	return nil
-}
-
 // enqueueMissing enqueues nodes whose desired cidr has no actual allocation (or
 // whose actual allocation had a NIC mismatch that was just deleted), so creation
 // flows through the single reconcile path.
-func (c *RouteController) enqueueMissing(desired map[string]string, actual []sdn.PodCIDRAllocation) {
+func (c *RouteController) enqueueMissing(desired map[string]desiredEntry, actual []sdn.PodCIDRAllocation) {
 	present := make(map[string]string, len(actual))
 	for i := range actual {
 		present[actual[i].DestinationCIDR] = actual[i].NetworkInterfaceID
 	}
 
-	for cidr, wantNIC := range desired {
+	for cidr, want := range desired {
 		haveNIC, ok := present[cidr]
-		if ok && haveNIC == wantNIC {
+		if ok && haveNIC == want.nicID {
 			continue
 		}
-		if name := c.nodeNameForCIDR(cidr); name != "" {
-			c.enqueue(name)
-		}
+		c.enqueue(want.nodeName)
 	}
-}
-
-// nodeNameForCIDR returns the CiliumNode name routing the given cidr, or "".
-func (c *RouteController) nodeNameForCIDR(cidr string) string {
-	objs, err := c.ciliumNodeLister.List(labels.Everything())
-	if err != nil {
-		return ""
-	}
-	for i := range objs {
-		u, ok := asUnstructured(objs[i])
-		if !ok {
-			continue
-		}
-		cn, convErr := ciliumNodeFromUnstructured(u)
-		if convErr != nil || len(cn.PodCIDRs) == 0 {
-			continue
-		}
-		if cn.PodCIDRs[0] == cidr {
-			return cn.Name
-		}
-	}
-
-	return ""
 }
 
 // locationEmpty reports whether the resolved location is still empty.

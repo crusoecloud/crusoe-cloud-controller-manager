@@ -92,15 +92,11 @@ func (t *opTracker) pendingIDs() []string {
 	return ids
 }
 
-// dispatch is a callback the poll loop invokes to enqueue a node key when an op
-// becomes terminal or is dropped.
-type dispatch func(nodeKey string)
-
 // recordResults processes a batch of ops returned by a poll: terminal ops move
 // pending -> results and their node is dispatched; ops absent from the returned
 // set have their miss counter incremented and are dropped (and dispatched) after
-// maxOpMisses. Returns nothing; it mutates tracker state and calls dispatch.
-func (t *opTracker) recordResults(ops []sdn.Operation, enqueue dispatch) {
+// maxOpMisses. Returns nothing; it mutates tracker state and calls enqueue.
+func (t *opTracker) recordResults(ops []sdn.Operation, enqueue func(nodeKey string)) {
 	t.mu.Lock()
 
 	seen := make(map[string]bool, len(ops))
