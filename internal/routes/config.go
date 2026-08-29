@@ -22,17 +22,6 @@ const (
 	// VPCPrefixReservationIDEnv is the KM-provisioned reservation id.
 	VPCPrefixReservationIDEnv = "CRUSOE_VPC_PREFIX_RESERVATION_ID"
 
-	// The following are defined but unused this drop (real gRPC client wiring).
-
-	// SDNEndpointEnv is the SDN service endpoint (unused this drop).
-	SDNEndpointEnv = "CRUSOE_SDN_ENDPOINT"
-	// SDNClientCertPathEnv is the mTLS client cert path (unused this drop).
-	SDNClientCertPathEnv = "CRUSOE_SDN_CLIENT_CERT_PATH"
-	// SDNClientKeyPathEnv is the mTLS client key path (unused this drop).
-	SDNClientKeyPathEnv = "CRUSOE_SDN_CLIENT_KEY_PATH"
-	// SDNCACertPathEnv is the mTLS CA cert path (unused this drop).
-	SDNCACertPathEnv = "CRUSOE_SDN_CA_CERT_PATH"
-
 	// RoutingModeOverlay is the default routing mode (controller not started).
 	RoutingModeOverlay = "overlay"
 	// RoutingModeNative enables VPC-native pod routing.
@@ -54,11 +43,6 @@ type Config struct {
 	VPCID                  string // context.vpc_network_id
 	VPCPrefixReservationID string
 	Location               string // resolved at startup from the cluster object; instance-derived fallback (§5.1)
-
-	SDNEndpoint       string // unused this drop
-	SDNClientCertPath string // unused this drop
-	SDNClientKeyPath  string // unused this drop
-	SDNCACertPath     string // unused this drop
 
 	PollInterval   time.Duration // opTracker tick + AddAfter backstop
 	ReaperInterval time.Duration
@@ -92,10 +76,6 @@ func LoadConfigFromEnv() (*Config, error) {
 		ProjectID:              os.Getenv(client.CrusoeProjectID),
 		VPCID:                  os.Getenv(VPCIDEnv),
 		VPCPrefixReservationID: os.Getenv(VPCPrefixReservationIDEnv),
-		SDNEndpoint:            os.Getenv(SDNEndpointEnv),
-		SDNClientCertPath:      os.Getenv(SDNClientCertPathEnv),
-		SDNClientKeyPath:       os.Getenv(SDNClientKeyPathEnv),
-		SDNCACertPath:          os.Getenv(SDNCACertPathEnv),
 		PollInterval:           defaultPollInterval,
 		ReaperInterval:         defaultReaperInterval,
 		ReaperGrace:            defaultReaperGrace,

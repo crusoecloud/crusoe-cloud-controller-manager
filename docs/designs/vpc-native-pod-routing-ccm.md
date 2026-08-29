@@ -279,11 +279,10 @@ const (
 	VPCPrefixReservationIDEnv = "CRUSOE_VPC_PREFIX_RESERVATION_ID" // KM-provisioned (VPCPrefixReservationManagement)
 	// No location env var: location (and the context's project id) are derived
 	// from instance metadata (§5.1).
-	// Defined but unused this drop (real gRPC client wiring):
-	SDNEndpointEnv       = "CRUSOE_SDN_ENDPOINT"
-	SDNClientCertPathEnv = "CRUSOE_SDN_CLIENT_CERT_PATH"
-	SDNClientKeyPathEnv  = "CRUSOE_SDN_CLIENT_KEY_PATH"
-	SDNCACertPathEnv     = "CRUSOE_SDN_CA_CERT_PATH"
+	// No SDN endpoint/mTLS env vars: the real client is constructed the way
+	// kubernetes-manager builds its region clients (§17) — region address +
+	// rpc.AuthInfo from the schemas grpcutil convention — added by the
+	// real-client MR next to their first use.
 
 	RoutingModeOverlay = "overlay"
 	RoutingModeNative  = "native"
@@ -295,8 +294,6 @@ type Config struct {
 	VPCID                  string // context.vpc_network_id
 	VPCPrefixReservationID string
 	Location               string // resolved at startup from the cluster object; instance-derived fallback (§5.1)
-	SDNEndpoint            string // unused this drop
-	SDNClientCertPath, SDNClientKeyPath, SDNCACertPath string // unused this drop
 
 	PollInterval   time.Duration // default 5s (opTracker tick + AddAfter backstop)
 	ReaperInterval time.Duration // default 5m
@@ -734,7 +731,7 @@ The current release manifest binds the CCM ServiceAccount to `cluster-admin` (`r
   verbs: ["create", "patch"]
 ```
 
-Deployment env (native mode; rendered by addon-controller MR 57 alongside the existing `CRUSOE_*` block at v0.1.2.yaml:74-95): `CRUSOE_ROUTING_MODE`, `CRUSOE_VPC_PREFIX_RESERVATION_ID`, `CRUSOE_VPC_ID` — exactly these three, all-or-none (§5). `CRUSOE_PROJECT_ID` is already rendered (v0.1.2.yaml:76). Location and the context's project id are derived from instance metadata (§5.1) — no further env needed. Reserved for the real client: `CRUSOE_SDN_ENDPOINT`, `CRUSOE_SDN_CLIENT_CERT_PATH`, `CRUSOE_SDN_CLIENT_KEY_PATH`, `CRUSOE_SDN_CA_CERT_PATH`.
+Deployment env (native mode; rendered by addon-controller MR 57 alongside the existing `CRUSOE_*` block at v0.1.2.yaml:74-95): `CRUSOE_ROUTING_MODE`, `CRUSOE_VPC_PREFIX_RESERVATION_ID`, `CRUSOE_VPC_ID` — exactly these three, all-or-none (§5). `CRUSOE_PROJECT_ID` is already rendered (v0.1.2.yaml:76). Location and the context's project id are derived from instance metadata (§5.1) — no further env needed. The real client's region address + mTLS material follow the kubernetes-manager `grpcutil` convention and arrive with the real-client MR (§17), not as reserved env here.
 
 ## 15. Testing Strategy
 
@@ -771,7 +768,7 @@ Each commit builds, passes `make lint` and `make test` independently.
 
 The generated clients **already exist**: `gitlab.com/crusoeenergy/schemas` ships `api/island/v2/region/pod_cidr_allocation_management_v2.pb.go` (+ grpc stubs) and region mocks. When SDN endpoint config lands, the swap is:
 
-1. One new file `internal/routes/sdn/grpc.go`: `type grpcClient struct{...}` implementing `PodCIDRAllocationClient` over the schemas-generated client, constructed from `cfg.SDNEndpoint` + mTLS material paths. Its only non-mechanical work is error mapping: gRPC status codes → sentinels (`codes.Unavailable`/`codes.Aborted` → `ErrUnavailable`, `codes.InvalidArgument` → `ErrInvalidArgument`, `codes.NotFound` → `ErrNotFound`), and for `codes.FailedPrecondition` inspect `status.Convert(err).Details()` for `google.rpc.ErrorInfo` with reason `DESTINATION_ALLOCATED_TO_ANOTHER_INTERFACE` → `ErrDestinationConflict` (reason-based, NOT code-based — FAILED_PRECONDITION is also the unclassified bucket).
+1. One new file `internal/routes/sdn/grpc.go`: `type grpcClient struct{...}` implementing `PodCIDRAllocationClient` over the schemas-generated client, **constructed the way kubernetes-manager builds its region clients** (`kubernetes-manager/internal/nodepool/v2/worker/clients.go:86-98`): a region address + `rpc.AuthInfo{cert_file,key_file,ca_file}` → `rpc.SetupMTLS` → `grpcutil.NewClientConnFactory(tlsConfig)` → `NewClientConn(regionAddress)` → `regiongrpc.NewPodCIDRAllocationManagementClient(conn)` (all from `gitlab.com/crusoeenergy/schemas/utils/rpc`; nil auth_info = plaintext for local dev). Config names for address/auth material follow that convention and are added by this MR next to their first use; instantiation stays native-mode-only by construction (register.go returns before any client is built in overlay mode). Its only non-mechanical work is error mapping: gRPC status codes → sentinels (`codes.Unavailable`/`codes.Aborted` → `ErrUnavailable`, `codes.InvalidArgument` → `ErrInvalidArgument`, `codes.NotFound` → `ErrNotFound`), and for `codes.FailedPrecondition` inspect `status.Convert(err).Details()` for `google.rpc.ErrorInfo` with reason `DESTINATION_ALLOCATED_TO_ANOTHER_INTERFACE` → `ErrDestinationConflict` (reason-based, NOT code-based — FAILED_PRECONDITION is also the unclassified bucket).
 2. `register.go` step 6 (§6.2): replace `sdn.NewLoggingFakeClient()` with the real constructor (behind the already-defined env vars), plus go.mod dependency on the schemas module.
 
 Nothing else changes: the state machine, tracker, reaper, tests, metrics, and RBAC are client-agnostic by construction. `fake.go` already models the merged contract's semantics, so it remains a truthful test double.
