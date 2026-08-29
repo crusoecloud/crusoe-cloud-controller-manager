@@ -1,4 +1,4 @@
-package routes_test
+package routes
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 
 	crusoeapi "github.com/crusoecloud/client-go/swagger/v1alpha5"
 	mock_client "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client/mock"
-	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes"
 	"github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 )
@@ -24,8 +23,8 @@ const (
 	nicClusterName = "sriprod1"
 )
 
-func nicConfig() *routes.Config {
-	return &routes.Config{
+func nicConfig() *Config {
+	return &Config{
 		ProjectID: nicProjectID,
 		VPCID:     nicVPCID,
 	}
@@ -50,11 +49,11 @@ func TestResolveNIC_ProviderIDPath(t *testing.T) {
 	})
 	m.EXPECT().GetInstanceByID(gomock.Any(), nicInstanceID).Return(inst, &http.Response{}, nil)
 
-	c := routes.NewTestController(nicConfig(), m)
+	c := newTestController(nicConfig(), m)
 	node := &v1.Node{}
 	node.Spec.ProviderID = "crusoe://" + nicInstanceID
 
-	got, err := c.ResolveNIC(context.Background(), nicNodeName, node)
+	got, err := c.resolveNIC(context.Background(), nicNodeName, node)
 	if err != nil {
 		t.Fatalf("resolveNIC: %v", err)
 	}
@@ -71,12 +70,12 @@ func TestResolveNIC_SystemUUIDPath(t *testing.T) {
 	// providerID differs from SystemUUID -> SystemUUID wins.
 	m.EXPECT().GetInstanceByID(gomock.Any(), nicInstanceID).Return(inst, &http.Response{}, nil)
 
-	c := routes.NewTestController(nicConfig(), m)
+	c := newTestController(nicConfig(), m)
 	node := &v1.Node{}
 	node.Spec.ProviderID = "crusoe://stale-id"
 	node.Status.NodeInfo.SystemUUID = nicInstanceID
 
-	got, err := c.ResolveNIC(context.Background(), nicNodeName, node)
+	got, err := c.resolveNIC(context.Background(), nicNodeName, node)
 	if err != nil {
 		t.Fatalf("resolveNIC: %v", err)
 	}
@@ -93,8 +92,8 @@ func TestResolveNIC_NameFallback(t *testing.T) {
 	// Node is nil -> straight to name lookup.
 	m.EXPECT().GetInstanceByName(gomock.Any(), nicNodeName).Return(inst, nil)
 
-	c := routes.NewTestController(nicConfig(), m)
-	got, err := c.ResolveNIC(context.Background(), nicNodeName, nil)
+	c := newTestController(nicConfig(), m)
+	got, err := c.resolveNIC(context.Background(), nicNodeName, nil)
 	if err != nil {
 		t.Fatalf("resolveNIC: %v", err)
 	}
@@ -111,11 +110,11 @@ func TestResolveNIC_GetByIDFailsFallsBackToName(t *testing.T) {
 	m.EXPECT().GetInstanceByID(gomock.Any(), nicInstanceID).Return(nil, nil, errors.New("boom"))
 	m.EXPECT().GetInstanceByName(gomock.Any(), nicNodeName).Return(inst, nil)
 
-	c := routes.NewTestController(nicConfig(), m)
+	c := newTestController(nicConfig(), m)
 	node := &v1.Node{}
 	node.Spec.ProviderID = "crusoe://" + nicInstanceID
 
-	got, err := c.ResolveNIC(context.Background(), nicNodeName, node)
+	got, err := c.resolveNIC(context.Background(), nicNodeName, node)
 	if err != nil {
 		t.Fatalf("resolveNIC: %v", err)
 	}
@@ -135,8 +134,8 @@ func TestResolveNIC_NICZeroFallback(t *testing.T) {
 	})
 	m.EXPECT().GetInstanceByName(gomock.Any(), nicNodeName).Return(inst, nil)
 
-	c := routes.NewTestController(nicConfig(), m)
-	got, err := c.ResolveNIC(context.Background(), nicNodeName, nil)
+	c := newTestController(nicConfig(), m)
+	got, err := c.resolveNIC(context.Background(), nicNodeName, nil)
 	if err != nil {
 		t.Fatalf("resolveNIC: %v", err)
 	}
@@ -151,8 +150,8 @@ func TestResolveNIC_ZeroNICsErrors(t *testing.T) {
 	m := mock_client.NewMockApiClient(ctrl)
 	m.EXPECT().GetInstanceByName(gomock.Any(), nicNodeName).Return(instanceWith(nil), nil)
 
-	c := routes.NewTestController(nicConfig(), m)
-	if _, err := c.ResolveNIC(context.Background(), nicNodeName, nil); err == nil {
+	c := newTestController(nicConfig(), m)
+	if _, err := c.resolveNIC(context.Background(), nicNodeName, nil); err == nil {
 		t.Fatalf("expected error for zero NICs")
 	}
 }
@@ -165,12 +164,12 @@ func TestResolveNIC_FillsLocationWhenEmpty(t *testing.T) {
 	m.EXPECT().GetInstanceByName(gomock.Any(), nicNodeName).Return(inst, nil)
 
 	cfg := nicConfig() // Location empty
-	c := routes.NewTestController(cfg, m)
-	if _, err := c.ResolveNIC(context.Background(), nicNodeName, nil); err != nil {
+	c := newTestController(cfg, m)
+	if _, err := c.resolveNIC(context.Background(), nicNodeName, nil); err != nil {
 		t.Fatalf("resolveNIC: %v", err)
 	}
-	if c.Location() != nicLocation {
-		t.Fatalf("expected location filled from instance, got %q", c.Location())
+	if c.cfg.Location != nicLocation {
+		t.Fatalf("expected location filled from instance, got %q", c.cfg.Location)
 	}
 }
 
@@ -182,9 +181,9 @@ func TestResolveNIC_CachesNICID(t *testing.T) {
 	// Exactly one call expected despite two ResolveNIC invocations.
 	m.EXPECT().GetInstanceByName(gomock.Any(), nicNodeName).Return(inst, nil).Times(1)
 
-	c := routes.NewTestController(nicConfig(), m)
+	c := newTestController(nicConfig(), m)
 	for range 2 {
-		if _, err := c.ResolveNIC(context.Background(), nicNodeName, nil); err != nil {
+		if _, err := c.resolveNIC(context.Background(), nicNodeName, nil); err != nil {
 			t.Fatalf("resolveNIC: %v", err)
 		}
 	}
@@ -197,7 +196,7 @@ func TestResolveLocationFromCluster(t *testing.T) {
 	m.EXPECT().GetClusterByName(gomock.Any(), nicProjectID, nicClusterName).
 		Return(&crusoeapi.KubernetesCluster{Name: nicClusterName, Location: nicLocation}, nil)
 
-	loc, err := routes.ResolveLocationFromCluster(context.Background(), m, nicProjectID, nicClusterName)
+	loc, err := resolveLocationFromCluster(context.Background(), m, nicProjectID, nicClusterName)
 	if err != nil {
 		t.Fatalf("resolveLocationFromCluster: %v", err)
 	}
@@ -214,7 +213,7 @@ func TestResolveLocationFromCluster_LookupFailureNonFatal(t *testing.T) {
 		Return(nil, errors.New("api down"))
 
 	// Returns an error the caller treats as non-fatal.
-	if _, err := routes.ResolveLocationFromCluster(context.Background(), m, nicProjectID, nicClusterName); err == nil {
+	if _, err := resolveLocationFromCluster(context.Background(), m, nicProjectID, nicClusterName); err == nil {
 		t.Fatalf("expected error propagated for non-fatal handling")
 	}
 }

@@ -1,4 +1,4 @@
-package routes_test
+package routes
 
 import (
 	"encoding/json"
@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -33,7 +32,7 @@ func loadFixture(t *testing.T) *unstructured.Unstructured {
 
 func TestCiliumNodeFromUnstructured_Fixture(t *testing.T) {
 	t.Parallel()
-	cn, err := routes.CiliumNodeFromUnstructured(loadFixture(t))
+	cn, err := ciliumNodeFromUnstructured(loadFixture(t))
 	if err != nil {
 		t.Fatalf("convert: %v", err)
 	}
@@ -56,7 +55,7 @@ func TestCiliumNodeFromUnstructured_DeletionTimestamp(t *testing.T) {
 	u := loadFixture(t)
 	now := metav1.Now()
 	u.SetDeletionTimestamp(&now)
-	cn, err := routes.CiliumNodeFromUnstructured(u)
+	cn, err := ciliumNodeFromUnstructured(u)
 	if err != nil {
 		t.Fatalf("convert: %v", err)
 	}
@@ -74,7 +73,7 @@ func TestCiliumNodeFromUnstructured_MissingIPAM(t *testing.T) {
 		"metadata":   map[string]any{"name": "fresh-node"},
 		"spec":       map[string]any{},
 	}}
-	cn, err := routes.CiliumNodeFromUnstructured(u)
+	cn, err := ciliumNodeFromUnstructured(u)
 	if err != nil {
 		t.Fatalf("missing ipam should not error: %v", err)
 	}
@@ -93,7 +92,7 @@ func TestCiliumNodeFromUnstructured_Malformed(t *testing.T) {
 			"ipam": map[string]any{"podCIDRs": "10.100.4.0/24"},
 		},
 	}}
-	if _, err := routes.CiliumNodeFromUnstructured(u); err == nil {
+	if _, err := ciliumNodeFromUnstructured(u); err == nil {
 		t.Fatalf("expected error for malformed podCIDRs")
 	}
 }
@@ -104,14 +103,14 @@ func TestCiliumNodeFromUnstructured_WrongKind(t *testing.T) {
 		"kind":     "Node",
 		"metadata": map[string]any{"name": "n"},
 	}}
-	if _, err := routes.CiliumNodeFromUnstructured(u); err == nil {
+	if _, err := ciliumNodeFromUnstructured(u); err == nil {
 		t.Fatalf("expected ErrNotCiliumNode for wrong kind")
 	}
 }
 
 func TestCiliumNodeFromUnstructured_Nil(t *testing.T) {
 	t.Parallel()
-	if _, err := routes.CiliumNodeFromUnstructured(nil); err == nil {
+	if _, err := ciliumNodeFromUnstructured(nil); err == nil {
 		t.Fatalf("expected error for nil input")
 	}
 }

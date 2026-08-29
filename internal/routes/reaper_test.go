@@ -1,4 +1,4 @@
-package routes_test
+package routes
 
 import (
 	"context"
@@ -7,13 +7,12 @@ import (
 	"time"
 
 	mock_client "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client/mock"
-	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes/sdn"
 	"github.com/golang/mock/gomock"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
-func reaperConfig() *routes.Config {
+func reaperConfig() *Config {
 	cfg := rcConfig()
 	cfg.ReaperGrace = 10 * time.Minute
 
@@ -41,10 +40,10 @@ func TestReaper_OrphanPastGraceDeleted(t *testing.T) {
 	// Orphan: no CiliumNode desires this cidr, and it is older than the grace.
 	seedAlloc(fakeSDN, "al-orphan", "10.200.0.0/24", "nic-dead", time.Hour)
 
-	h := routes.NewReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(), fakeSDN, m)
+	h := newReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(), fakeSDN, m)
 	// No CiliumNodes -> nothing desired.
 
-	h.ReapOnce(context.Background())
+	h.controller.reapOnce(context.Background())
 	// The delete op is async; drive one poll cycle so it resolves.
 	drainAllOps(t, fakeSDN)
 
@@ -63,8 +62,8 @@ func TestReaper_YoungOrphanSpared(t *testing.T) {
 	// Young orphan within grace.
 	seedAlloc(fakeSDN, "al-young", "10.200.0.0/24", "nic-dead", time.Minute)
 
-	h := routes.NewReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(), fakeSDN, m)
-	h.ReapOnce(context.Background())
+	h := newReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(), fakeSDN, m)
+	h.controller.reapOnce(context.Background())
 	drainAllOps(t, fakeSDN)
 
 	if len(listAll(t, fakeSDN)) != 1 {
@@ -83,10 +82,10 @@ func TestReaper_NICMismatchDeletedAndEnqueued(t *testing.T) {
 	seedAlloc(fakeSDN, "al-stale", rcCIDR, "nic-stale", time.Hour)
 
 	node := taintedNode()
-	h := routes.NewReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(node), fakeSDN, m)
+	h := newReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(node), fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR), node)
 
-	h.ReapOnce(context.Background())
+	h.controller.reapOnce(context.Background())
 	drainAllOps(t, fakeSDN)
 
 	if len(listAll(t, fakeSDN)) != 0 {
@@ -104,13 +103,13 @@ func TestReaper_MissingEnqueued(t *testing.T) {
 	// Desired but no actual allocation -> the node should be enqueued and, when
 	// reconciled, an allocation is created.
 	node := taintedNode()
-	h := routes.NewReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(node), fakeSDN, m)
+	h := newReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(node), fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR), node)
 
-	h.ReapOnce(context.Background())
+	h.controller.reapOnce(context.Background())
 
 	// The reaper enqueued the node; reconcile it and confirm a create happened.
-	if _, err := h.Reconcile(context.Background(), rcNode); err != nil {
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if len(listAll(t, fakeSDN)) != 1 {
@@ -130,8 +129,8 @@ func TestReaper_ChunkingOver50(t *testing.T) {
 		seedAlloc(fakeSDN, fmt.Sprintf("al-%03d", i), fmt.Sprintf("10.201.%d.0/24", i), "nic-dead", time.Hour)
 	}
 
-	h := routes.NewReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(), fakeSDN, m)
-	h.ReapOnce(context.Background())
+	h := newReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(), fakeSDN, m)
+	h.controller.reapOnce(context.Background())
 	drainAllOps(t, fakeSDN)
 
 	if got := len(listAll(t, fakeSDN)); got != 0 {
@@ -149,9 +148,9 @@ func TestReaper_LocationUndrivenSkips(t *testing.T) {
 
 	cfg := reaperConfig()
 	cfg.Location = "" // not yet resolved
-	h := routes.NewReconcileHarness(cfg, k8sfake.NewSimpleClientset(), fakeSDN, m)
+	h := newReconcileHarness(cfg, k8sfake.NewSimpleClientset(), fakeSDN, m)
 
-	h.ReapOnce(context.Background())
+	h.controller.reapOnce(context.Background())
 	drainAllOps(t, fakeSDN)
 
 	// Pass skipped -> nothing deleted.

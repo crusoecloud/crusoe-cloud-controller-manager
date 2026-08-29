@@ -1,4 +1,4 @@
-package routes_test
+package routes
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 
 	crusoeapi "github.com/crusoecloud/client-go/swagger/v1alpha5"
 	mock_client "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client/mock"
-	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes/sdn"
 	"github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
@@ -28,8 +27,8 @@ const (
 	rcNIC     = "nic-vpc"
 )
 
-func rcConfig() *routes.Config {
-	return &routes.Config{
+func rcConfig() *Config {
+	return &Config{
 		ProjectID:              rcProject,
 		VPCID:                  rcVPC,
 		VPCPrefixReservationID: rcRsv,
@@ -56,20 +55,20 @@ func ciliumNodeObj(cidrs ...string) *unstructured.Unstructured {
 func taintedNode() *v1.Node {
 	n := &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: rcNode}}
 	n.Spec.ProviderID = "crusoe://inst-" + rcNode
-	n.Spec.Taints = []v1.Taint{{Key: routes.PodsUnroutableTaintKey, Effect: v1.TaintEffectNoSchedule}}
+	n.Spec.Taints = []v1.Taint{{Key: PodsUnroutableTaintKey, Effect: v1.TaintEffectNoSchedule}}
 
 	return n
 }
 
 // seed adds a CiliumNode and (optionally) a Node to the harness, failing on
 // error.
-func seed(t *testing.T, h *routes.ReconcileHarness, cn *unstructured.Unstructured, node *v1.Node) {
+func seed(t *testing.T, h *reconcileHarness, cn *unstructured.Unstructured, node *v1.Node) {
 	t.Helper()
-	if err := h.AddCiliumNode(cn); err != nil {
+	if err := h.addCiliumNode(cn); err != nil {
 		t.Fatalf("add cilium node: %v", err)
 	}
 	if node != nil {
-		if err := h.AddNode(node); err != nil {
+		if err := h.addNode(node); err != nil {
 			t.Fatalf("add node: %v", err)
 		}
 	}
@@ -121,7 +120,7 @@ func getNode(t *testing.T, kube *k8sfake.Clientset) *v1.Node {
 
 func hasUnroutableTaint(node *v1.Node) bool {
 	for i := range node.Spec.Taints {
-		if node.Spec.Taints[i].Key == routes.PodsUnroutableTaintKey {
+		if node.Spec.Taints[i].Key == PodsUnroutableTaintKey {
 			return true
 		}
 	}
@@ -132,17 +131,17 @@ func hasUnroutableTaint(node *v1.Node) bool {
 // drainToReady runs reconcile + poll ticks until the node is finalized or the
 // bound is hit, syncing the lister from the fake clientset after each step to
 // emulate the informer.
-func drainToReady(t *testing.T, h *routes.ReconcileHarness) {
+func drainToReady(t *testing.T, h *reconcileHarness) {
 	t.Helper()
 	ctx := context.Background()
 	for range 10 {
-		if _, err := h.Reconcile(ctx, rcNode); err != nil {
+		if _, err := h.controller.reconcile(ctx, rcNode); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
-		if err := h.SyncNodeFromClient(ctx, rcNode); err != nil {
+		if err := h.syncNodeFromClient(ctx, rcNode); err != nil {
 			t.Fatalf("sync node: %v", err)
 		}
-		h.PollOpsOnce(ctx)
+		h.controller.pollOpsOnce(ctx)
 	}
 }
 
@@ -156,11 +155,11 @@ func TestReconcile_HappyPath(t *testing.T) {
 	kube := k8sfake.NewSimpleClientset(node)
 	fakeSDN := sdn.NewLoggingFakeClient()
 
-	h := routes.NewReconcileHarness(rcConfig(), kube, fakeSDN, m)
-	if err := h.AddCiliumNode(ciliumNodeObj(rcCIDR)); err != nil {
+	h := newReconcileHarness(rcConfig(), kube, fakeSDN, m)
+	if err := h.addCiliumNode(ciliumNodeObj(rcCIDR)); err != nil {
 		t.Fatalf("add cilium node: %v", err)
 	}
-	if err := h.AddNode(node); err != nil {
+	if err := h.addNode(node); err != nil {
 		t.Fatalf("add node: %v", err)
 	}
 
@@ -175,10 +174,10 @@ func assertFinalized(t *testing.T, final *v1.Node) {
 	if hasUnroutableTaint(final) {
 		t.Fatalf("taint should be removed after ready")
 	}
-	if final.Labels[routes.OpIDLabel] != "" {
-		t.Fatalf("op-id label should be cleared, got %q", final.Labels[routes.OpIDLabel])
+	if final.Labels[OpIDLabel] != "" {
+		t.Fatalf("op-id label should be cleared, got %q", final.Labels[OpIDLabel])
 	}
-	readyAt := final.Labels[routes.ReadyAtLabel]
+	readyAt := final.Labels[ReadyAtLabel]
 	if readyAt == "" {
 		t.Fatalf("ready-at label should be set")
 	}
@@ -214,11 +213,11 @@ func TestReconcile_OpIDLabelWrittenBeforePoll(t *testing.T) {
 	fakeSDN := sdn.NewLoggingFakeClient()
 	fakeSDN.PendingPolls = 3 // keep the op in flight
 
-	h := routes.NewReconcileHarness(rcConfig(), kube, fakeSDN, m)
+	h := newReconcileHarness(rcConfig(), kube, fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR), node)
 
 	// First reconcile: create + immediate op-id label patch, requeue.
-	requeue, err := h.Reconcile(context.Background(), rcNode)
+	requeue, err := h.controller.reconcile(context.Background(), rcNode)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -226,7 +225,7 @@ func TestReconcile_OpIDLabelWrittenBeforePoll(t *testing.T) {
 		t.Fatalf("expected requeue while op in flight, got %v", requeue)
 	}
 	patched := getNode(t, kube)
-	if patched.Labels[routes.OpIDLabel] == "" {
+	if patched.Labels[OpIDLabel] == "" {
 		t.Fatalf("op-id label must be patched immediately after create")
 	}
 	if !hasUnroutableTaint(patched) {
@@ -240,10 +239,10 @@ func TestReconcile_EmptyPodCIDRsNoop(t *testing.T) {
 	m := mock_client.NewMockApiClient(ctrl)
 
 	kube := k8sfake.NewSimpleClientset()
-	h := routes.NewReconcileHarness(rcConfig(), kube, sdn.NewLoggingFakeClient(), m)
+	h := newReconcileHarness(rcConfig(), kube, sdn.NewLoggingFakeClient(), m)
 	seed(t, h, ciliumNodeObj(), nil) // no cidrs
 
-	requeue, err := h.Reconcile(context.Background(), rcNode)
+	requeue, err := h.controller.reconcile(context.Background(), rcNode)
 	if err != nil || requeue != 0 {
 		t.Fatalf("expected no-op, got requeue=%v err=%v", requeue, err)
 	}
@@ -257,10 +256,10 @@ func TestReconcile_CiliumNodeDeletedZeroSDNCalls(t *testing.T) {
 	kube := k8sfake.NewSimpleClientset()
 	// A recording SDN that fails the test if any method is called.
 	strict := &strictNoCallSDN{t: t}
-	h := routes.NewReconcileHarness(rcConfig(), kube, strict, m)
+	h := newReconcileHarness(rcConfig(), kube, strict, m)
 	// No CiliumNode added -> lister returns NotFound -> gone path.
 
-	requeue, err := h.Reconcile(context.Background(), rcNode)
+	requeue, err := h.controller.reconcile(context.Background(), rcNode)
 	if err != nil || requeue != 0 {
 		t.Fatalf("deleted CiliumNode should be a clean no-op, got requeue=%v err=%v", requeue, err)
 	}
@@ -275,7 +274,7 @@ func TestReconcile_MultiCIDRRoutesFirst(t *testing.T) {
 	node := taintedNode()
 	kube := k8sfake.NewSimpleClientset(node)
 	fakeSDN := sdn.NewLoggingFakeClient()
-	h := routes.NewReconcileHarness(rcConfig(), kube, fakeSDN, m)
+	h := newReconcileHarness(rcConfig(), kube, fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR, "10.100.5.0/24"), node)
 
 	drainToReady(t, h)
@@ -301,24 +300,24 @@ func TestReconcile_FailNextClearsLabelAndErrors(t *testing.T) {
 	fakeSDN := sdn.NewLoggingFakeClient()
 	fakeSDN.FailNext = true
 
-	h := routes.NewReconcileHarness(rcConfig(), kube, fakeSDN, m)
+	h := newReconcileHarness(rcConfig(), kube, fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR), node)
 
 	// Create (op-id patched), poll flips FAILED.
-	if _, err := h.Reconcile(context.Background(), rcNode); err != nil {
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
-	if err := h.SyncNodeFromClient(context.Background(), rcNode); err != nil {
+	if err := h.syncNodeFromClient(context.Background(), rcNode); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	h.PollOpsOnce(context.Background())
+	h.controller.pollOpsOnce(context.Background())
 
 	// Next reconcile observes FAILED: clears label, returns error.
-	if _, err := h.Reconcile(context.Background(), rcNode); err == nil {
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err == nil {
 		t.Fatalf("expected error on FAILED op")
 	}
 	got := getNode(t, kube)
-	if got.Labels[routes.OpIDLabel] != "" {
+	if got.Labels[OpIDLabel] != "" {
 		t.Fatalf("op-id label must be cleared after FAILED op")
 	}
 	if !hasUnroutableTaint(got) {
@@ -337,17 +336,17 @@ func TestReconcile_ConflictKeepsTaint(t *testing.T) {
 	fakeSDN := sdn.NewLoggingFakeClient()
 	fakeSDN.ConflictCIDRs[rcCIDR] = true
 
-	h := routes.NewReconcileHarness(rcConfig(), kube, fakeSDN, m)
+	h := newReconcileHarness(rcConfig(), kube, fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR), node)
 
-	if _, err := h.Reconcile(context.Background(), rcNode); err == nil {
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err == nil {
 		t.Fatalf("expected conflict error")
 	}
 	got := getNode(t, kube)
 	if !hasUnroutableTaint(got) {
 		t.Fatalf("taint must remain on conflict")
 	}
-	if got.Labels[routes.ReadyAtLabel] != "" {
+	if got.Labels[ReadyAtLabel] != "" {
 		t.Fatalf("ready-at must not be set on conflict")
 	}
 }
@@ -374,11 +373,11 @@ func TestReconcile_AdoptExistingAllocationNoCreate(t *testing.T) {
 	}
 	drainPreseed(t, fakeSDN, op.OperationID)
 
-	h := routes.NewReconcileHarness(rcConfig(), kube, fakeSDN, m)
+	h := newReconcileHarness(rcConfig(), kube, fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR), node)
 
 	// No op-id label -> C7 List-before-create adopts, then finalizes.
-	if _, err := h.Reconcile(context.Background(), rcNode); err != nil {
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if hasUnroutableTaint(getNode(t, kube)) {
@@ -397,15 +396,15 @@ func TestReconcile_NodeAbsentDefersFinalize(t *testing.T) {
 
 	kube := k8sfake.NewSimpleClientset() // no Node object
 	fakeSDN := sdn.NewLoggingFakeClient()
-	h := routes.NewReconcileHarness(rcConfig(), kube, fakeSDN, m)
+	h := newReconcileHarness(rcConfig(), kube, fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR), nil) // No Node.
 
 	// Create proceeds; finalize is deferred (node==nil).
-	if _, err := h.Reconcile(context.Background(), rcNode); err != nil {
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	h.PollOpsOnce(context.Background())
-	if _, err := h.Reconcile(context.Background(), rcNode); err != nil {
+	h.controller.pollOpsOnce(context.Background())
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 		t.Fatalf("reconcile2: %v", err)
 	}
 
@@ -425,29 +424,29 @@ func TestReconcile_RecoverOpIDLabelSucceeded(t *testing.T) {
 	fakeSDN.PendingPolls = 1
 
 	kube1 := k8sfake.NewSimpleClientset(node)
-	h := routes.NewReconcileHarness(rcConfig(), kube1, fakeSDN, m)
+	h := newReconcileHarness(rcConfig(), kube1, fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR), node)
 
 	// First reconcile creates and registers the op.
-	if _, err := h.Reconcile(context.Background(), rcNode); err != nil {
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if len(h.Tracker().PendingIDs()) != 1 {
-		t.Fatalf("expected one tracked op, got %d", len(h.Tracker().PendingIDs()))
+	if len(h.controller.tracker.pendingIDs()) != 1 {
+		t.Fatalf("expected one tracked op, got %d", len(h.controller.tracker.pendingIDs()))
 	}
 
 	// Simulate a NEW leader: fresh tracker that has never seen the op, but the
 	// op-id label is durable on the Node.
 	patched := getNode(t, kube1)
-	if patched.Labels[routes.OpIDLabel] == "" {
+	if patched.Labels[OpIDLabel] == "" {
 		t.Fatalf("op-id label must be present for recovery")
 	}
 	kube2 := k8sfake.NewSimpleClientset(patched)
-	h2 := routes.NewReconcileHarness(rcConfig(), kube2, fakeSDN, m)
+	h2 := newReconcileHarness(rcConfig(), kube2, fakeSDN, m)
 	seed(t, h2, ciliumNodeObj(rcCIDR), patched)
 
 	// New leader: op-id present, tracker unaware -> re-track, then resolves.
-	if _, err := h2.Reconcile(context.Background(), rcNode); err != nil {
+	if _, err := h2.controller.reconcile(context.Background(), rcNode); err != nil {
 		t.Fatalf("recovery reconcile: %v", err)
 	}
 	drainToReady(t, h2)
@@ -475,23 +474,23 @@ func TestReconcile_RecoverOpIDLabelExpiredAdopts(t *testing.T) {
 
 	// Node carries an op-id label for an op the SDN no longer knows.
 	node := taintedNode()
-	node.Labels = map[string]string{routes.OpIDLabel: "op-expired-unknown"}
+	node.Labels = map[string]string{OpIDLabel: "op-expired-unknown"}
 	kube := k8sfake.NewSimpleClientset(node)
-	h := routes.NewReconcileHarness(rcConfig(), kube, fakeSDN, m)
+	h := newReconcileHarness(rcConfig(), kube, fakeSDN, m)
 	seed(t, h, ciliumNodeObj(rcCIDR), node)
 
 	// First reconcile registers the unknown op (tracker had never seen it) and
 	// requeues; the poll will not find it.
-	if _, err := h.Reconcile(context.Background(), rcNode); err != nil {
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	// Drive misses until the tracker drops it, then reconcile adopts via List.
-	for range routes.MaxOpMisses + 2 {
-		h.PollOpsOnce(context.Background())
-		if _, err := h.Reconcile(context.Background(), rcNode); err != nil {
+	for range maxOpMisses + 2 {
+		h.controller.pollOpsOnce(context.Background())
+		if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 			t.Fatalf("reconcile loop: %v", err)
 		}
-		if err := h.SyncNodeFromClient(context.Background(), rcNode); err != nil {
+		if err := h.syncNodeFromClient(context.Background(), rcNode); err != nil {
 			t.Fatalf("sync: %v", err)
 		}
 	}

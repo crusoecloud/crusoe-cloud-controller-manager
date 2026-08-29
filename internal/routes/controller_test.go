@@ -1,9 +1,8 @@
-package routes_test
+package routes
 
 import (
 	"testing"
 
-	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
@@ -12,7 +11,7 @@ import (
 func nodeWithTaint() *v1.Node {
 	n := &v1.Node{}
 	n.Name = "n"
-	n.Spec.Taints = []v1.Taint{{Key: routes.PodsUnroutableTaintKey, Effect: v1.TaintEffectNoSchedule}}
+	n.Spec.Taints = []v1.Taint{{Key: PodsUnroutableTaintKey, Effect: v1.TaintEffectNoSchedule}}
 
 	return n
 }
@@ -29,7 +28,7 @@ func nodeReady() *v1.Node {
 
 func TestNodeNeedsWork_Taint(t *testing.T) {
 	t.Parallel()
-	if !routes.NodeNeedsWork(nodeWithTaint()) {
+	if !nodeNeedsWork(nodeWithTaint()) {
 		t.Fatalf("node with pods-unroutable taint needs work")
 	}
 }
@@ -37,8 +36,8 @@ func TestNodeNeedsWork_Taint(t *testing.T) {
 func TestNodeNeedsWork_OpIDLabel(t *testing.T) {
 	t.Parallel()
 	n := nodeReady()
-	n.Labels = map[string]string{routes.OpIDLabel: "op-1"}
-	if !routes.NodeNeedsWork(n) {
+	n.Labels = map[string]string{OpIDLabel: "op-1"}
+	if !nodeNeedsWork(n) {
 		t.Fatalf("node with in-flight op-id label needs work")
 	}
 }
@@ -47,14 +46,14 @@ func TestNodeNeedsWork_MissingCondition(t *testing.T) {
 	t.Parallel()
 	n := &v1.Node{}
 	n.Name = "n"
-	if !routes.NodeNeedsWork(n) {
+	if !nodeNeedsWork(n) {
 		t.Fatalf("node lacking NetworkUnavailable=False needs work")
 	}
 }
 
 func TestNodeNeedsWork_Ready(t *testing.T) {
 	t.Parallel()
-	if routes.NodeNeedsWork(nodeReady()) {
+	if nodeNeedsWork(nodeReady()) {
 		t.Fatalf("ready node (no taint, condition set, no op-id) needs no work")
 	}
 }
@@ -62,7 +61,7 @@ func TestNodeNeedsWork_Ready(t *testing.T) {
 func TestMetaName_Object(t *testing.T) {
 	t.Parallel()
 	obj := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: "worker-0"}}
-	name, ok := routes.MetaName(obj)
+	name, ok := metaName(obj)
 	if !ok || name != "worker-0" {
 		t.Fatalf("expected worker-0, got %q ok=%v", name, ok)
 	}
@@ -72,7 +71,7 @@ func TestMetaName_Tombstone(t *testing.T) {
 	t.Parallel()
 	obj := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}}
 	tombstone := cache.DeletedFinalStateUnknown{Key: "worker-1", Obj: obj}
-	name, ok := routes.MetaName(tombstone)
+	name, ok := metaName(tombstone)
 	if !ok || name != "worker-1" {
 		t.Fatalf("expected worker-1 from tombstone, got %q ok=%v", name, ok)
 	}
@@ -80,7 +79,7 @@ func TestMetaName_Tombstone(t *testing.T) {
 
 func TestMetaName_Unknown(t *testing.T) {
 	t.Parallel()
-	if _, ok := routes.MetaName("not-an-object"); ok {
+	if _, ok := metaName("not-an-object"); ok {
 		t.Fatalf("expected false for non-object")
 	}
 }

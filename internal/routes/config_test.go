@@ -1,10 +1,8 @@
-package routes_test
+package routes
 
 import (
 	"errors"
 	"testing"
-
-	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes"
 )
 
 const (
@@ -21,17 +19,17 @@ type configCase struct {
 	name    string
 	env     map[string]string
 	wantErr error
-	check   func(t *testing.T, cfg *routes.Config)
+	check   func(t *testing.T, cfg *Config)
 }
 
-func checkOverlay(t *testing.T, cfg *routes.Config) {
+func checkOverlay(t *testing.T, cfg *Config) {
 	t.Helper()
-	if cfg.RoutingMode != routes.RoutingModeOverlay {
+	if cfg.RoutingMode != RoutingModeOverlay {
 		t.Fatalf("expected overlay, got %q", cfg.RoutingMode)
 	}
 }
 
-func checkNative(t *testing.T, cfg *routes.Config) {
+func checkNative(t *testing.T, cfg *Config) {
 	t.Helper()
 	if cfg.VPCID != testVPCID || cfg.VPCPrefixReservationID != testReservation ||
 		cfg.ProjectID != testProjectID {
@@ -48,7 +46,7 @@ func checkNative(t *testing.T, cfg *routes.Config) {
 
 func nativeEnv() map[string]string {
 	return map[string]string{
-		envRoutingMode: routes.RoutingModeNative,
+		envRoutingMode: RoutingModeNative,
 		envVPCID:       testVPCID,
 		envReservation: testReservation,
 		envProjectID:   testProjectID,
@@ -68,22 +66,22 @@ func configCases() []configCase {
 		{name: "overlay default when unset", env: map[string]string{}, check: checkOverlay},
 		{
 			name:  "overlay explicit",
-			env:   map[string]string{envRoutingMode: routes.RoutingModeOverlay},
+			env:   map[string]string{envRoutingMode: RoutingModeOverlay},
 			check: checkOverlay,
 		},
 		{name: "native with all vars", env: nativeEnv(), check: checkNative},
-		{name: "native missing vpc id", env: withoutKey(envVPCID), wantErr: routes.ErrMissingConfig},
-		{name: "native missing reservation", env: withoutKey(envReservation), wantErr: routes.ErrMissingConfig},
-		{name: "native missing project id", env: withoutKey(envProjectID), wantErr: routes.ErrMissingConfig},
+		{name: "native missing vpc id", env: withoutKey(envVPCID), wantErr: ErrMissingConfig},
+		{name: "native missing reservation", env: withoutKey(envReservation), wantErr: ErrMissingConfig},
+		{name: "native missing project id", env: withoutKey(envProjectID), wantErr: ErrMissingConfig},
 		{
 			name:    "overlay with stray vpc id",
-			env:     map[string]string{envRoutingMode: routes.RoutingModeOverlay, envVPCID: testVPCID},
-			wantErr: routes.ErrInconsistentConfig,
+			env:     map[string]string{envRoutingMode: RoutingModeOverlay, envVPCID: testVPCID},
+			wantErr: ErrInconsistentConfig,
 		},
 		{
 			name:    "overlay with stray reservation",
 			env:     map[string]string{envReservation: testReservation},
-			wantErr: routes.ErrInconsistentConfig,
+			wantErr: ErrInconsistentConfig,
 		},
 	}
 }
@@ -98,7 +96,7 @@ func runConfigCase(t *testing.T, tc *configCase) {
 		t.Setenv(k, v)
 	}
 
-	cfg, err := routes.LoadConfigFromEnv()
+	cfg, err := LoadConfigFromEnv()
 	if tc.wantErr != nil {
 		if !errors.Is(err, tc.wantErr) {
 			t.Fatalf("expected error %v, got %v", tc.wantErr, err)

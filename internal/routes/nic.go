@@ -55,13 +55,8 @@ func (c *RouteController) resolveNIC(ctx context.Context, nodeName string, node 
 func (c *RouteController) resolveInstance(ctx context.Context, nodeName string, node *v1.Node,
 ) (*crusoeapi.InstanceV1Alpha5, error) {
 	if node != nil {
-		if id := instanceIDFromNode(node); id != "" {
-			inst, _, err := c.apiClient.GetInstanceByID(ctx, id)
-			if err == nil {
-				return inst, nil
-			}
-			klog.V(4).InfoS("resolveNIC: GetInstanceByID failed, falling back to name",
-				"node", nodeName, "instanceID", id, "err", err)
+		if inst := c.instanceByID(ctx, nodeName, node); inst != nil {
+			return inst, nil
 		}
 	}
 
@@ -71,6 +66,30 @@ func (c *RouteController) resolveInstance(ctx context.Context, nodeName string, 
 	}
 
 	return inst, nil
+}
+
+// instanceByID attempts the id-based lookup, returning nil (and logging) on any
+// miss so the caller falls back to the name lookup.
+func (c *RouteController) instanceByID(
+	ctx context.Context, nodeName string, node *v1.Node,
+) *crusoeapi.InstanceV1Alpha5 {
+	id := instanceIDFromNode(node)
+	if id == "" {
+		return nil
+	}
+
+	inst, resp, err := c.apiClient.GetInstanceByID(ctx, id)
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		klog.V(4).InfoS("resolveNIC: GetInstanceByID failed, falling back to name",
+			"node", nodeName, "instanceID", id, "err", err)
+
+		return nil
+	}
+
+	return inst
 }
 
 // instanceIDFromNode returns the crusoe instance id derived from the Node,

@@ -1,10 +1,9 @@
-package routes_test
+package routes
 
 import (
 	"errors"
 	"testing"
 
-	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes"
 	"k8s.io/cloud-provider/app"
 )
 
@@ -12,7 +11,7 @@ import (
 // produces a non-nil InitFunc (the app framework requires one).
 func TestStartRouteControllerWrapper_ReturnsInitFunc(t *testing.T) {
 	t.Parallel()
-	fn := routes.StartRouteControllerWrapper(app.ControllerInitContext{}, nil, nil)
+	fn := StartRouteControllerWrapper(app.ControllerInitContext{}, nil, nil)
 	if fn == nil {
 		t.Fatalf("expected a non-nil InitFunc")
 	}
@@ -31,7 +30,7 @@ func modeGateCases() []modeGateCase {
 		{
 			name: "native with all vars enabled",
 			env: map[string]string{
-				envRoutingMode: routes.RoutingModeNative,
+				envRoutingMode: RoutingModeNative,
 				envVPCID:       testVPCID,
 				envReservation: testReservation,
 				envProjectID:   testProjectID,
@@ -41,19 +40,19 @@ func modeGateCases() []modeGateCase {
 		{
 			name: "native missing reservation fails fast",
 			env: map[string]string{
-				envRoutingMode: routes.RoutingModeNative,
+				envRoutingMode: RoutingModeNative,
 				envVPCID:       testVPCID,
 				envProjectID:   testProjectID,
 			},
-			wantErr: routes.ErrMissingConfig,
+			wantErr: ErrMissingConfig,
 		},
 		{
 			name: "overlay with stray vpc id fails fast",
 			env: map[string]string{
-				envRoutingMode: routes.RoutingModeOverlay,
+				envRoutingMode: RoutingModeOverlay,
 				envVPCID:       testVPCID,
 			},
-			wantErr: routes.ErrInconsistentConfig,
+			wantErr: ErrInconsistentConfig,
 		},
 	}
 }
@@ -72,7 +71,7 @@ func TestModeGate_FailFast(t *testing.T) {
 				t.Setenv(k, v)
 			}
 
-			cfg, err := routes.LoadConfigFromEnv()
+			cfg, err := LoadConfigFromEnv()
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("expected %v, got %v", tc.wantErr, err)
@@ -83,8 +82,8 @@ func TestModeGate_FailFast(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if routes.NativeModeEnabled(cfg) != tc.wantEnabled {
-				t.Fatalf("enabled=%v, want %v", routes.NativeModeEnabled(cfg), tc.wantEnabled)
+			if (cfg.RoutingMode == RoutingModeNative) != tc.wantEnabled {
+				t.Fatalf("enabled=%v, want %v", (cfg.RoutingMode == RoutingModeNative), tc.wantEnabled)
 			}
 		})
 	}
