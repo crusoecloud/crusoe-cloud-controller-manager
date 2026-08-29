@@ -6,6 +6,7 @@ import (
 
 	cloudcontrollermanager "github.com/crusoecloud/crusoe-cloud-controller-manager/internal"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/node"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes"
 	"k8s.io/apimachinery/pkg/util/wait"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/cloud-provider/app"
@@ -38,6 +39,15 @@ func main() {
 			ClientName: "node-controller",
 		},
 		Constructor: node.StartCloudNodeLifecycleControllerWrapper,
+	}
+
+	// Register the Crusoe VPC route controller (VPC-native pod routing, CRUSOE-97212).
+	// No-ops unless CRUSOE_ROUTING_MODE=native.
+	app.DefaultInitFuncConstructors["crusoe-route-controller"] = app.ControllerInitFuncConstructor{
+		InitContext: app.ControllerInitContext{
+			ClientName: "crusoe-route-controller",
+		},
+		Constructor: routes.StartRouteControllerWrapper,
 	}
 
 	command := app.NewCloudControllerManagerCommand(

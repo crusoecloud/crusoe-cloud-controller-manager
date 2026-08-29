@@ -6,6 +6,7 @@ require (
 	github.com/antihax/optional v1.0.0
 	github.com/crusoecloud/client-go v0.1.128
 	github.com/golang/mock v1.6.0
+	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.11.1
 	k8s.io/api v0.35.5
 	k8s.io/apimachinery v0.35.5
@@ -44,7 +45,6 @@ require (
 	github.com/google/cel-go v0.26.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
