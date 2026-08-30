@@ -50,4 +50,8 @@ type PodCIDRAllocationClient interface {
 	// ListPodCIDRAllocationOperations supports repeated operation_ids — ONE call
 	// covers every in-flight operation (the opTracker relies on this).
 	ListPodCIDRAllocationOperations(ctx context.Context, q ListPodCIDRAllocationOperationsQuery) ([]Operation, error)
+	// ListVPCPrefixReservations returns the reservations with the given ids.
+	// Only called when more than one reservation is configured (post pod-range
+	// expansion) to pick the reservation containing a node's pod cidr.
+	ListVPCPrefixReservations(ctx context.Context, ids []string) ([]VPCPrefixReservation, error)
 }

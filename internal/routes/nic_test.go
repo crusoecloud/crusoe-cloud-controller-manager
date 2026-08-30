@@ -123,11 +123,13 @@ func TestResolveNIC_GetByIDFailsFallsBackToName(t *testing.T) {
 	}
 }
 
-func TestResolveNIC_NICZeroFallback(t *testing.T) {
+func TestResolveNIC_NoNICInVPCErrors(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	m := mock_client.NewMockApiClient(ctrl)
-	// No NIC matches the VPC -> NICs[0].
+	// No NIC matches the VPC -> hard (retryable) error, never a guess: the SDN
+	// contract requires the NIC to be in the allocation's vpc, so a fallback
+	// pick could only fail downstream with a less actionable message.
 	inst := instanceWith([]crusoeapi.NetworkInterface{
 		{Id: "nic-first", Network: "net-x"},
 		{Id: "nic-second", Network: "net-y"},
@@ -135,12 +137,9 @@ func TestResolveNIC_NICZeroFallback(t *testing.T) {
 	m.EXPECT().GetInstanceByName(gomock.Any(), nicNodeName).Return(inst, nil)
 
 	c := newTestController(nicConfig(), m)
-	got, err := c.resolveNIC(context.Background(), nicNodeName, nil)
-	if err != nil {
-		t.Fatalf("resolveNIC: %v", err)
-	}
-	if got != "nic-first" {
-		t.Fatalf("expected nic-first fallback, got %s", got)
+	_, err := c.resolveNIC(context.Background(), nicNodeName, nil)
+	if !errors.Is(err, ErrNoNICInVPC) {
+		t.Fatalf("expected ErrNoNICInVPC, got %v", err)
 	}
 }
 

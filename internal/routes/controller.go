@@ -150,7 +150,11 @@ func (c *RouteController) Run(ctx context.Context,
 		go wait.UntilWithContext(ctx, c.runWorker, time.Second)
 	}
 	go wait.UntilWithContext(ctx, c.pollOpsOnce, c.cfg.PollInterval)
-	go wait.UntilWithContext(ctx, c.reapOnce, c.cfg.ReaperInterval)
+	if reaperEnabled {
+		go wait.UntilWithContext(ctx, c.reapOnce, c.cfg.ReaperInterval)
+	} else {
+		klog.Info("crusoe-route-controller: reaper disabled (in-code kill switch)")
+	}
 
 	<-ctx.Done()
 	klog.Info("Stopping crusoe-route-controller")

@@ -12,8 +12,13 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// ErrNoNetworkInterfaces indicates the resolved instance has no NICs.
-var ErrNoNetworkInterfaces = errors.New("instance has no network interfaces")
+var (
+	// ErrNoNetworkInterfaces indicates the resolved instance has no NICs.
+	ErrNoNetworkInterfaces = errors.New("instance has no network interfaces")
+	// ErrNoNICInVPC indicates none of the instance's NICs is in the configured
+	// VPC — a mis-wired deployment (wrong CRUSOE_VPC_ID or wrong network).
+	ErrNoNICInVPC = errors.New("no network interface in configured VPC")
+)
 
 // resolveNIC returns the network_interface_id for nodeName, caching it in
 // nodeState.nicID (immutable per instance). Resolution order:
@@ -21,8 +26,11 @@ var ErrNoNetworkInterfaces = errors.New("instance has no network interfaces")
 //  2. Node.Status.NodeInfo.SystemUUID -> GetInstanceByID
 //  3. GetInstanceByName(nodeName)
 //
-// The NIC whose Network == cfg.VPCID is chosen; if none matches, NICs[0] is used
-// with a warning. Node may be nil (not yet registered), which skips steps 1-2.
+// The NIC whose Network == cfg.VPCID is chosen; if none matches, resolution
+// fails (retryable) — the SDN contract requires the NIC to be in the
+// allocation's vpc+location, so any other pick can only fail downstream with a
+// less actionable error. Node may be nil (not yet registered), which skips
+// steps 1-2.
 //
 // Each successful resolve also sanity-checks the instance's project/location
 // against the startup-resolved config, warning on mismatch (§5.1).
@@ -103,20 +111,23 @@ func instanceIDFromNode(node *v1.Node) string {
 	return providerID
 }
 
-// selectNICID picks the NIC whose Network == vpcID, else NICs[0] with a warning.
+// selectNICID picks the NIC whose Network == vpcID; a miss is a hard (but
+// retryable) error naming the VPC and the NICs found.
 func selectNICID(inst *crusoeapi.InstanceV1Alpha5, vpcID string) (string, error) {
 	if len(inst.NetworkInterfaces) == 0 {
 		return "", ErrNoNetworkInterfaces
 	}
+	nics := make([]string, 0, len(inst.NetworkInterfaces))
 	for i := range inst.NetworkInterfaces {
 		if inst.NetworkInterfaces[i].Network == vpcID {
 			return inst.NetworkInterfaces[i].Id, nil
 		}
+		nics = append(nics, fmt.Sprintf("%s (network %s)",
+			inst.NetworkInterfaces[i].Id, inst.NetworkInterfaces[i].Network))
 	}
-	klog.Warningf("no NIC on instance %s matches VPC %s; using first NIC %s",
-		inst.Id, vpcID, inst.NetworkInterfaces[0].Id)
 
-	return inst.NetworkInterfaces[0].Id, nil
+	return "", fmt.Errorf("%w %s on instance %s (check CRUSOE_VPC_ID; have: %s)",
+		ErrNoNICInVPC, vpcID, inst.Id, strings.Join(nics, ", "))
 }
 
 // warnMetadataMismatch warns when instance metadata disagrees with the

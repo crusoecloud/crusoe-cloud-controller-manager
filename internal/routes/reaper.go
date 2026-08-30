@@ -2,6 +2,7 @@ package routes
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"time"
 
@@ -12,8 +13,14 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// reaperEnabled is a code-level kill switch for the periodic sweep: deletion
+// stays off until DeletePodCIDRAllocations behavior is validated against the
+// real SDN service. Flip to true to re-enable.
+const reaperEnabled = false
+
 // maxDeleteChunk is the contract cap on delete ids per DeletePodCIDRAllocations
-// call.
+// call. It doubles as the per-pass deletion cap: blast-radius insurance against
+// desired-state bugs — a legitimate backlog drains across passes.
 const maxDeleteChunk = 50
 
 const reasonOrphanedAllocationDeleted = "OrphanedAllocationDeleted"
@@ -22,12 +29,18 @@ const reasonOrphanedAllocationDeleted = "OrphanedAllocationDeleted"
 // caller of DeletePodCIDRAllocations. Deletes are grace-gated to protect racing
 // joins and in-flight VM deletes; missing/mismatched nodes are enqueued through
 // the normal reconcile path so the reaper never races the state machine on
-// creates.
+// creates. Any failure to build the full desired state aborts the pass: the
+// reaper fails closed, never deleting on partial knowledge.
 func (c *RouteController) reapOnce(ctx context.Context) {
-	desired := c.buildDesired(ctx)
+	desired, err := c.buildDesired(ctx)
+	if err != nil {
+		klog.ErrorS(err, "reaper: build desired state failed; aborting pass (no deletes)")
+
+		return
+	}
 
 	actual, err := c.sdn.ListPodCIDRAllocations(ctx, sdn.ListPodCIDRAllocationsQuery{
-		VPCPrefixReservationIDs: []string{c.cfg.VPCPrefixReservationID},
+		VPCPrefixReservationIDs: c.cfg.VPCPrefixReservationIDs,
 	})
 	if err != nil {
 		klog.ErrorS(err, "reaper: list allocations failed; aborting pass")
@@ -43,36 +56,35 @@ func (c *RouteController) reapOnce(ctx context.Context) {
 }
 
 // desiredEntry is the reaper's per-cidr desired state: the NIC that should hold
-// the allocation and the CiliumNode/Node name that routes it (for events).
+// the allocation (empty when unresolvable this pass) and the CiliumNode/Node
+// name that routes it (for events).
 type desiredEntry struct {
 	nicID    string
 	nodeName string
 }
 
 // buildDesired maps destination_cidr -> desiredEntry for every live CiliumNode
-// with a routed podCIDR, in one walk of the lister. On a state-cache miss it
-// resolves the NIC; a node whose NIC cannot be resolved is skipped (never
-// guessed).
-func (c *RouteController) buildDesired(ctx context.Context) map[string]desiredEntry {
+// with a routed podCIDR, in one walk of the lister. Errors that lose track of a
+// node's cidr (lister failure, conversion failure) abort the whole pass — a
+// live node silently dropped from desired would make its allocation look like
+// a deletable orphan. A NIC-resolution failure keeps the entry with nicID ""
+// (the cidr stays protected; only the NIC comparison is skipped).
+func (c *RouteController) buildDesired(ctx context.Context) (map[string]desiredEntry, error) {
 	desired := make(map[string]desiredEntry)
 
 	objs, err := c.ciliumNodeLister.List(labels.Everything())
 	if err != nil {
-		klog.ErrorS(err, "reaper: list CiliumNodes failed")
-
-		return desired
+		return nil, fmt.Errorf("failed to list CiliumNodes: %w", err)
 	}
 
 	for i := range objs {
 		u, ok := objs[i].(*unstructured.Unstructured)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("%w: %T", ErrNotCiliumNode, objs[i])
 		}
 		cn, convErr := ciliumNodeFromUnstructured(u)
 		if convErr != nil {
-			klog.ErrorS(convErr, "reaper: CiliumNode conversion failed")
-
-			continue
+			return nil, fmt.Errorf("failed to convert CiliumNode: %w", convErr)
 		}
 		if cn.DeletionTimestamp != nil || len(cn.PodCIDRs) == 0 {
 			continue
@@ -80,14 +92,12 @@ func (c *RouteController) buildDesired(ctx context.Context) map[string]desiredEn
 
 		nicID := c.desiredNICID(ctx, cn.Name)
 		if nicID == "" {
-			klog.Warningf("reaper: skipping node %s, NIC unresolved", cn.Name)
-
-			continue
+			klog.Warningf("reaper: NIC unresolved for node %s; protecting its cidr, skipping NIC checks", cn.Name)
 		}
 		desired[cn.PodCIDRs[0]] = desiredEntry{nicID: nicID, nodeName: cn.Name}
 	}
 
-	return desired
+	return desired, nil
 }
 
 // desiredNICID returns the cached NIC id for a node, resolving it on a miss.
@@ -116,8 +126,8 @@ func (c *RouteController) deleteOrphans(
 	for i := range actual {
 		a := actual[i]
 		want, ok := desired[a.DestinationCIDR]
-		if ok && want.nicID == a.NetworkInterfaceID {
-			continue // matches desired
+		if ok && (want.nicID == "" || want.nicID == a.NetworkInterfaceID) {
+			continue // matches desired, or NIC unknown this pass (fail closed)
 		}
 		if now.Sub(a.CreatedAt) < c.cfg.ReaperGrace {
 			continue // too young; protect racing joins / in-flight VM deletes
@@ -127,6 +137,12 @@ func (c *RouteController) deleteOrphans(
 
 	if len(candidates) == 0 {
 		return
+	}
+
+	// Per-pass cap: blast-radius insurance. A real backlog drains across passes.
+	if len(candidates) > maxDeleteChunk {
+		klog.Warningf("reaper: capping deletions at %d of %d candidates this pass", maxDeleteChunk, len(candidates))
+		candidates = candidates[:maxDeleteChunk]
 	}
 
 	c.deleteInChunks(ctx, desired, candidates)
@@ -189,9 +205,13 @@ func (c *RouteController) enqueueMissing(desired map[string]desiredEntry, actual
 
 	for cidr, want := range desired {
 		haveNIC, ok := present[cidr]
-		if ok && haveNIC == want.nicID {
+		if !ok {
+			c.enqueue(want.nodeName) // no allocation at all
+
 			continue
 		}
-		c.enqueue(want.nodeName)
+		if want.nicID != "" && haveNIC != want.nicID {
+			c.enqueue(want.nodeName) // NIC mismatch (unknown NIC: nothing to compare)
+		}
 	}
 }

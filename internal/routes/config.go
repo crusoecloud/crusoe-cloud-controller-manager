@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
@@ -11,7 +12,7 @@ import (
 
 // Environment variables that configure the route controller. In native mode the
 // crusoe-ccm Deployment (addon-controller MR 57) sets exactly three routing
-// vars: RoutingModeEnv, VPCIDEnv and VPCPrefixReservationIDEnv. All three are
+// vars: RoutingModeEnv, VPCIDEnv and VPCPrefixReservationIDsEnv. All three are
 // set together in native mode and absent in overlay; a partial set is a
 // misrendered config and must fail startup loudly.
 const (
@@ -19,8 +20,10 @@ const (
 	RoutingModeEnv = "CRUSOE_ROUTING_MODE"
 	// VPCIDEnv maps to PodCIDRAllocationContext.vpc_network_id.
 	VPCIDEnv = "CRUSOE_VPC_ID"
-	// VPCPrefixReservationIDEnv is the KM-provisioned reservation id.
-	VPCPrefixReservationIDEnv = "CRUSOE_VPC_PREFIX_RESERVATION_ID"
+	// VPCPrefixReservationIDsEnv is the comma-separated list of KM-provisioned
+	// reservation ids in creation order: one at cluster create, more after a
+	// pod-range expansion (the reservation API has no resize).
+	VPCPrefixReservationIDsEnv = "CRUSOE_VPC_PREFIX_RESERVATION_IDS"
 
 	// RoutingModeOverlay is the default routing mode (controller not started).
 	RoutingModeOverlay = "overlay"
@@ -38,11 +41,11 @@ const (
 
 // Config holds the resolved route-controller configuration.
 type Config struct {
-	RoutingMode            string
-	ProjectID              string // from CRUSOE_PROJECT_ID; the instance client needs it too
-	VPCID                  string // context.vpc_network_id
-	VPCPrefixReservationID string
-	Location               string // resolved fail-fast at startup from the cluster object (§5.1); then immutable
+	RoutingMode             string
+	ProjectID               string   // from CRUSOE_PROJECT_ID; the instance client needs it too
+	VPCID                   string   // context.vpc_network_id
+	VPCPrefixReservationIDs []string // creation order; creates pick by cidr containment
+	Location                string   // resolved fail-fast at startup from the cluster object (§5.1); then immutable
 
 	PollInterval   time.Duration // opTracker tick + AddAfter backstop
 	ReaperInterval time.Duration
@@ -56,14 +59,14 @@ var (
 	// ErrInconsistentConfig indicates a partial native-routing env set.
 	ErrInconsistentConfig = errors.New(
 		"partial native-routing env set (CRUSOE_ROUTING_MODE / CRUSOE_VPC_ID / " +
-			"CRUSOE_VPC_PREFIX_RESERVATION_ID must be all set or all absent)")
+			"CRUSOE_VPC_PREFIX_RESERVATION_IDS must be all set or all absent)")
 )
 
 // LoadConfigFromEnv reads the route-controller configuration from the process
 // environment. In overlay mode it returns a config with RoutingMode set but no
 // SDN wiring; if a stray VPC var is set in overlay mode it returns
 // ErrInconsistentConfig. In native mode it requires CRUSOE_VPC_ID,
-// CRUSOE_VPC_PREFIX_RESERVATION_ID and CRUSOE_PROJECT_ID to be non-empty.
+// CRUSOE_VPC_PREFIX_RESERVATION_IDS and CRUSOE_PROJECT_ID to be non-empty.
 // Location is always derived from platform metadata (§5.1), never from env.
 func LoadConfigFromEnv() (*Config, error) {
 	mode := os.Getenv(RoutingModeEnv)
@@ -72,14 +75,14 @@ func LoadConfigFromEnv() (*Config, error) {
 	}
 
 	cfg := &Config{
-		RoutingMode:            mode,
-		ProjectID:              os.Getenv(client.CrusoeProjectID),
-		VPCID:                  os.Getenv(VPCIDEnv),
-		VPCPrefixReservationID: os.Getenv(VPCPrefixReservationIDEnv),
-		PollInterval:           defaultPollInterval,
-		ReaperInterval:         defaultReaperInterval,
-		ReaperGrace:            defaultReaperGrace,
-		Workers:                defaultWorkers,
+		RoutingMode:             mode,
+		ProjectID:               os.Getenv(client.CrusoeProjectID),
+		VPCID:                   os.Getenv(VPCIDEnv),
+		VPCPrefixReservationIDs: splitCommaList(os.Getenv(VPCPrefixReservationIDsEnv)),
+		PollInterval:            defaultPollInterval,
+		ReaperInterval:          defaultReaperInterval,
+		ReaperGrace:             defaultReaperGrace,
+		Workers:                 defaultWorkers,
 	}
 
 	if mode == RoutingModeNative {
@@ -91,11 +94,24 @@ func LoadConfigFromEnv() (*Config, error) {
 	}
 
 	// Overlay (or any non-native mode): the VPC vars must not be set.
-	if cfg.VPCID != "" || cfg.VPCPrefixReservationID != "" {
+	if cfg.VPCID != "" || len(cfg.VPCPrefixReservationIDs) > 0 {
 		return nil, ErrInconsistentConfig
 	}
 
 	return cfg, nil
+}
+
+// splitCommaList splits a comma-separated env value, trimming whitespace and
+// dropping empty elements ("" -> nil).
+func splitCommaList(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+
+	return out
 }
 
 // validateNative enforces that all required native-mode vars are present.
@@ -105,7 +121,7 @@ func validateNative(cfg *Config) error {
 		value string
 	}{
 		{VPCIDEnv, cfg.VPCID},
-		{VPCPrefixReservationIDEnv, cfg.VPCPrefixReservationID},
+		{VPCPrefixReservationIDsEnv, strings.Join(cfg.VPCPrefixReservationIDs, ",")},
 		{client.CrusoeProjectID, cfg.ProjectID},
 	}
 	for _, r := range required {

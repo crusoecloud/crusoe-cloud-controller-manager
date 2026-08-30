@@ -2,6 +2,7 @@ package routes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -117,24 +118,59 @@ func TestReaper_MissingEnqueued(t *testing.T) {
 	}
 }
 
-func TestReaper_ChunkingOver50(t *testing.T) {
+func TestReaper_CappedDeletesDrainAcrossPasses(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)
 	m := mock_client.NewMockApiClient(ctrl)
 	mockInstance(m)
 
 	fakeSDN := sdn.NewLoggingFakeClient()
-	// 120 orphans past grace -> must be deleted across chunks of <=50.
+	// 120 orphans past grace -> at most maxDeleteChunk deleted per pass (blast-
+	// radius cap); the backlog drains across passes.
 	for i := range 120 {
 		seedAlloc(fakeSDN, fmt.Sprintf("al-%03d", i), fmt.Sprintf("10.201.%d.0/24", i), "nic-dead", time.Hour)
 	}
 
 	h := newReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(), fakeSDN, m)
+
+	h.controller.reapOnce(context.Background())
+	drainAllOps(t, fakeSDN)
+	if got := len(listAll(t, fakeSDN)); got != 120-maxDeleteChunk {
+		t.Fatalf("first pass should delete exactly the cap (%d), %d remain", maxDeleteChunk, got)
+	}
+
+	for range 2 {
+		h.controller.reapOnce(context.Background())
+		drainAllOps(t, fakeSDN)
+	}
+	if got := len(listAll(t, fakeSDN)); got != 0 {
+		t.Fatalf("orphan backlog should drain across capped passes, %d remain", got)
+	}
+}
+
+func TestReaper_UnresolvedNICProtectsDesiredCIDR(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	m := mock_client.NewMockApiClient(ctrl)
+	// Instance lookups fail -> the node's NIC is unresolvable this pass. Its
+	// allocation must be protected (fail closed), not treated as an orphan.
+	m.EXPECT().GetInstanceByID(gomock.Any(), gomock.Any()).
+		Return(nil, nil, errors.New("api down")).AnyTimes()
+	m.EXPECT().GetInstanceByName(gomock.Any(), gomock.Any()).
+		Return(nil, errors.New("api down")).AnyTimes()
+
+	fakeSDN := sdn.NewLoggingFakeClient()
+	seedAlloc(fakeSDN, "al-live", rcCIDR, rcNIC, time.Hour) // well past grace
+
+	node := taintedNode()
+	h := newReconcileHarness(reaperConfig(), k8sfake.NewSimpleClientset(node), fakeSDN, m)
+	seed(t, h, ciliumNodeObj(rcCIDR), node)
+
 	h.controller.reapOnce(context.Background())
 	drainAllOps(t, fakeSDN)
 
-	if got := len(listAll(t, fakeSDN)); got != 0 {
-		t.Fatalf("all orphans should be deleted across chunks, %d remain", got)
+	if len(listAll(t, fakeSDN)) != 1 {
+		t.Fatalf("allocation for a node with unresolved NIC must never be deleted")
 	}
 }
 

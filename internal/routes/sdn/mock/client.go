@@ -81,6 +81,21 @@ func (mr *MockPodCIDRAllocationClientMockRecorder) ListPodCIDRAllocationOperatio
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPodCIDRAllocationOperations", reflect.TypeOf((*MockPodCIDRAllocationClient)(nil).ListPodCIDRAllocationOperations), ctx, q)
 }
 
+// ListVPCPrefixReservations mocks base method.
+func (m *MockPodCIDRAllocationClient) ListVPCPrefixReservations(ctx context.Context, ids []string) ([]sdn.VPCPrefixReservation, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListVPCPrefixReservations", ctx, ids)
+	ret0, _ := ret[0].([]sdn.VPCPrefixReservation)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListVPCPrefixReservations indicates an expected call of ListVPCPrefixReservations.
+func (mr *MockPodCIDRAllocationClientMockRecorder) ListVPCPrefixReservations(ctx, ids interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListVPCPrefixReservations", reflect.TypeOf((*MockPodCIDRAllocationClient)(nil).ListVPCPrefixReservations), ctx, ids)
+}
+
 // ListPodCIDRAllocations mocks base method.
 func (m *MockPodCIDRAllocationClient) ListPodCIDRAllocations(ctx context.Context, q sdn.ListPodCIDRAllocationsQuery) ([]sdn.PodCIDRAllocation, error) {
 	m.ctrl.T.Helper()

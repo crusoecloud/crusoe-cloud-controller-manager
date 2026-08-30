@@ -19,11 +19,12 @@ is gated entirely by the `CRUSOE_ROUTING_MODE` environment variable:
   `crusoe.ai/pods-unroutable:NoSchedule` taint once the allocation is ready.
 
 In native mode the deployment must also set `CRUSOE_VPC_ID` and
-`CRUSOE_VPC_PREFIX_RESERVATION_ID`. These three routing variables are all-or-none:
-a partial set fails CCM startup loudly (it indicates misrendered config). The
-cluster location and SDN project id are derived from platform metadata, so no
-further environment is required; `--cluster-name` must equal the Crusoe cluster
-resource name (it is used to resolve the cluster's location).
+`CRUSOE_VPC_PREFIX_RESERVATION_IDS` (comma-separated reservation ids in creation
+order — one at cluster create, more after a pod-range expansion). These three
+routing variables are all-or-none: a partial set fails CCM startup loudly (it
+indicates misrendered config). The SDN project id comes from `CRUSOE_PROJECT_ID`
+and the cluster location is resolved at startup from the cluster object;
+`--cluster-name` must equal the Crusoe cluster resource name.
 
 See [`docs/designs/vpc-native-pod-routing-ccm.md`](docs/designs/vpc-native-pod-routing-ccm.md)
 for the full design, including the deployment env block and the least-privilege

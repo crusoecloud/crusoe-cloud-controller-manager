@@ -39,6 +39,14 @@ func (f *LoggingFakeClient) logList(q *ListPodCIDRAllocationsQuery, matches int)
 	)
 }
 
+func (f *LoggingFakeClient) logListReservations(ids []string, matches int) {
+	klog.InfoS("SDN RPC (fake)",
+		"rpc", "ListVPCPrefixReservations",
+		"ids", ids,
+		"matches", matches,
+	)
+}
+
 func (f *LoggingFakeClient) logListOps(q *ListPodCIDRAllocationOperationsQuery, results []Operation) {
 	states := make([]OperationState, 0, len(results))
 	for i := range results {

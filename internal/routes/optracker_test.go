@@ -21,7 +21,7 @@ func TestOpTracker_TerminalDispatchesAndStashes(t *testing.T) {
 	tr.Track("op-1", "node-a")
 
 	var enqueued []string
-	tr.recordResults([]sdn.Operation{succeeded("op-1", "al-1")}, func(k string) {
+	tr.recordResults([]string{"op-1"}, []sdn.Operation{succeeded("op-1", "al-1")}, func(k string) {
 		enqueued = append(enqueued, k)
 	})
 
@@ -50,7 +50,7 @@ func TestOpTracker_InProgressStaysPending(t *testing.T) {
 	tr.Track("op-1", "node-a")
 
 	var enqueued []string
-	tr.recordResults([]sdn.Operation{inProgress("op-1")}, func(k string) {
+	tr.recordResults([]string{"op-1"}, []sdn.Operation{inProgress("op-1")}, func(k string) {
 		enqueued = append(enqueued, k)
 	})
 
@@ -72,7 +72,7 @@ func TestOpTracker_DropsAfterMisses(t *testing.T) {
 
 	// Op absent from every poll: increments misses. Dropped at MaxOpMisses.
 	for i := range maxOpMisses {
-		tr.recordResults([]sdn.Operation{}, enqueue)
+		tr.recordResults([]string{"op-gone"}, []sdn.Operation{}, enqueue)
 		if i < maxOpMisses-1 {
 			if len(tr.pendingIDs()) != 1 {
 				t.Fatalf("op should still be pending before miss limit (i=%d)", i)
@@ -101,7 +101,7 @@ func TestOpTracker_ForgetRemovesBoth(t *testing.T) {
 	t.Parallel()
 	tr := newOpTracker()
 	tr.Track("op-1", "node-a")
-	tr.recordResults([]sdn.Operation{succeeded("op-1", "al-1")}, func(string) {})
+	tr.recordResults([]string{"op-1"}, []sdn.Operation{succeeded("op-1", "al-1")}, func(string) {})
 	tr.Forget("op-1")
 	if _, ok := tr.TakeResult("op-1"); ok {
 		t.Fatalf("Forget should drop the stashed result")
@@ -118,7 +118,7 @@ func TestOpTracker_ConcurrentSafe(t *testing.T) {
 			defer wg.Done()
 			id := "op-" + string(rune('a'+n))
 			tr.Track(id, "node")
-			tr.recordResults([]sdn.Operation{succeeded(id, "al")}, func(string) {})
+			tr.recordResults([]string{id}, []sdn.Operation{succeeded(id, "al")}, func(string) {})
 			tr.TakeResult(id)
 		}(i)
 	}

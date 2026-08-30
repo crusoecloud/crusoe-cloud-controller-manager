@@ -8,6 +8,8 @@ RFC: CRUSOE-97212. Target repo: `github.com/crusoecloud/crusoe-cloud-controller-
 
 **Revision 2026-08-28 (c).** Location resolution no longer waits for the first node: the primary source is the **cluster object** — `ListClusters(project)` matched on the `--cluster-name` flag the deployment already passes (v0.1.2.yaml:69) → `KubernetesCluster.Location` — resolved once at controller startup (§5.1). Instance-derived location remains the fallback/cross-check.
 
+**Revision 2026-08-30 (e).** Review-round hardening: the reservation env went **plural** (`CRUSOE_VPC_PREFIX_RESERVATION_IDS`, comma-separated in creation order — clusterlet/addon-controller render one id at create, more after a pod-range expansion; the reservation API has no resize). Creates pick the reservation containing the node's cidr (netip containment; single-id fast path skips the lookup), Lists pass the whole id list. The reaper now **fails closed**: any error building desired state (lister/conversion) aborts the pass, an unresolvable NIC protects its cidr instead of orphaning it, and deletions are capped at 50 per pass as blast-radius insurance; the whole sweep is behind an in-code kill switch (`reaperEnabled = false`) until delete behavior is validated against the real SDN service. `selectNICID` no longer falls back to NICs[0] when nothing matches `CRUSOE_VPC_ID` — that mis-wiring is now a hard retryable error naming the VPC and NICs found.
+
 **Revision 2026-08-29 (d).** Startup location resolution is now **fatal on failure** and the instance-derived fallback is removed: `Config` is immutable before any worker goroutine starts, which deletes the mutex around shared config (the lazy fill forced locking; racy lock-free writes — even though all writers converge on the same value in a single-cluster CCM — are still a data race under the Go memory model). Instance metadata remains as a read-only mismatch warning (§5.1). §6.4 records controller-runtime as a considered-and-deferred alternative.
 
 ## 1. Overview & Scope
@@ -17,7 +19,7 @@ In native routing mode, cilium (cluster-pool IPAM) allocates each node a pod /24
 Two SDN services exist. The CCM calls only the first:
 
 - `island.v2.region.PodCIDRAllocationManagement` — async create/delete (via `island.v2.component.Operation`) + synchronous lists. This controller's entire SDN surface.
-- `island.v2.region.VPCPrefixReservationManagement` — synchronous, **KM-owned**. The CCM never calls it; the reservation id arrives pre-provisioned via `CRUSOE_VPC_PREFIX_RESERVATION_ID`. Mentioned for context only.
+- `island.v2.region.VPCPrefixReservationManagement` — synchronous, **KM-owned** (create/delete). The reservation ids arrive pre-provisioned via `CRUSOE_VPC_PREFIX_RESERVATION_IDS`; the CCM's only read (`ListVPCPrefixReservations` on the client seam) happens when more than one reservation is configured (post pod-range expansion), to pick the reservation containing a node's cidr at create time.
 
 **In scope (this drop):**
 
@@ -40,7 +42,7 @@ Two SDN services exist. The CCM calls only the first:
 - Per-node happy path: CiliumNode gets podCIDRs → `CreatePodCIDRAllocations` (1 spec) → patch Node label `crusoe.ai/pod-cidr-allocation-op-id` **immediately** (durable before anything depends on it) → `opTracker` batch-polls until `SUCCEEDED` → set Node condition `NetworkUnavailable=False` → one final Node patch: set label `crusoe.ai/pod-cidr-allocation-ready-at` (Unix epoch seconds, CCM-observed completion time), clear op-id, remove taint **last**.
 - No delete path: CiliumNode deletion only clears in-memory soft state. VM delete owns SDN-side allocation removal (KM MR 1314).
 - The **/24-reuse race is expected**: node B can receive a /24 whose allocation still points at dead node A's NIC (k8s node delete precedes VM delete completion). Create fails `FAILED_PRECONDITION` with ErrorInfo reason `DESTINATION_ALLOCATED_TO_ANOTHER_INTERFACE` → Node event + conflict metric + requeue with backoff; node stays tainted; self-resolves when the VM delete lands. Sustained conflicts indicate a leaked allocation (alert; reaper cleans).
-- Reaper is the **only** defense against leaked allocations (e.g. `kubectl delete node` while the VM lives on, or VM-delete flows that failed after NIC teardown): desired `{destination_cidr → network_interface_id}` from CiliumNodes vs actual from `ListPodCIDRAllocations(vpc_prefix_reservation_ids=[reservation])`; batch-delete orphans (≤50 ids/call, chunked) with a grace period against racing joins; enqueue missing via the normal reconcile queue; NIC-mismatch = delete-then-recreate.
+- Reaper is the **only** defense against leaked allocations (e.g. `kubectl delete node` while the VM lives on, or VM-delete flows that failed after NIC teardown): desired `{destination_cidr → network_interface_id}` from CiliumNodes vs actual from `ListPodCIDRAllocations(vpc_prefix_reservation_ids=<all configured>)`; batch-delete orphans (≤50 ids/call, chunked) with a grace period against racing joins; enqueue missing via the normal reconcile queue; NIC-mismatch = delete-then-recreate.
 - Level-triggered, idempotent. Durable state lives on the Node (labels) — after leader failover the new leader reads the op id off the Node and resumes polling instead of blindly re-creating (re-create is also safe: create is contractually idempotent, §4).
 - Leader election comes free from the cloud-provider app framework (`--leader-elect=true` already set, `releases/crusoe-cloud-controller-manager/v0.1.2.yaml:67`).
 
@@ -272,15 +274,15 @@ Use `klog.InfoS` (structured), consistent with klog usage across the repo (`inte
 
 Env-var pattern follows `internal/cloud.go:14-19` (consts) and `internal/client/client.go:16-18` (`CRUSOE_PROJECT_ID`).
 
-The crusoe-ccm Deployment rendered by addon-controller (MR 57, merged direction) sets **exactly** three routing vars: `CRUSOE_ROUTING_MODE`, `CRUSOE_VPC_PREFIX_RESERVATION_ID`, `CRUSOE_VPC_ID`. All three are always set together in native mode and absent in overlay — **a partial set must fail startup loudly** (misrendered config, not a mode choice).
+The crusoe-ccm Deployment rendered by addon-controller (MR 57, merged direction) sets **exactly** three routing vars: `CRUSOE_ROUTING_MODE`, `CRUSOE_VPC_PREFIX_RESERVATION_IDS` (comma-separated, creation order), `CRUSOE_VPC_ID`. All three are always set together in native mode and absent in overlay — **a partial set must fail startup loudly** (misrendered config, not a mode choice).
 
 ```go
 const (
 	RoutingModeEnv            = "CRUSOE_ROUTING_MODE"              // "overlay" (default) | "native"
 	VPCIDEnv                  = "CRUSOE_VPC_ID"                    // → PodCIDRAllocationContext.vpc_network_id
-	VPCPrefixReservationIDEnv = "CRUSOE_VPC_PREFIX_RESERVATION_ID" // KM-provisioned (VPCPrefixReservationManagement)
-	// No location env var: location (and the context's project id) are derived
-	// from instance metadata (§5.1).
+	VPCPrefixReservationIDsEnv = "CRUSOE_VPC_PREFIX_RESERVATION_IDS" // KM-provisioned, comma-separated in creation order
+	// No location env var: location is resolved fail-fast at startup from the
+	// cluster object (§5.1); the context's project id is CRUSOE_PROJECT_ID.
 	// No SDN endpoint/mTLS env vars: the real client is constructed the way
 	// kubernetes-manager builds its region clients (§17) — region address +
 	// rpc.AuthInfo from the schemas grpcutil convention — added by the
@@ -291,11 +293,11 @@ const (
 )
 
 type Config struct {
-	RoutingMode            string
-	ProjectID              string // from CRUSOE_PROJECT_ID (internal/client/client.go:17; already rendered, v0.1.2.yaml:76)
-	VPCID                  string // context.vpc_network_id
-	VPCPrefixReservationID string
-	Location               string // resolved at startup from the cluster object; instance-derived fallback (§5.1)
+	RoutingMode             string
+	ProjectID               string // from CRUSOE_PROJECT_ID (internal/client/client.go:17; already rendered, v0.1.2.yaml:76)
+	VPCID                   string // context.vpc_network_id
+	VPCPrefixReservationIDs []string // creation order; creates pick by cidr containment (single id: no lookup)
+	Location                string // resolved fail-fast at startup from the cluster object (§5.1); then immutable
 
 	PollInterval   time.Duration // default 5s (opTracker tick + AddAfter backstop)
 	ReaperInterval time.Duration // default 5m
@@ -305,16 +307,16 @@ type Config struct {
 
 var (
 	ErrMissingConfig      = errors.New("missing required environment variable for native routing mode")
-	ErrInconsistentConfig = errors.New("partial native-routing env set (CRUSOE_ROUTING_MODE / CRUSOE_VPC_ID / CRUSOE_VPC_PREFIX_RESERVATION_ID must be all set or all absent)")
+	ErrInconsistentConfig = errors.New("partial native-routing env set (CRUSOE_ROUTING_MODE / CRUSOE_VPC_ID / CRUSOE_VPC_PREFIX_RESERVATION_IDS must be all set or all absent)")
 )
 
 // LoadConfigFromEnv:
 //   overlay mode: returns (cfg, nil) — but if CRUSOE_VPC_ID or
-//     CRUSOE_VPC_PREFIX_RESERVATION_ID is set anyway → ErrInconsistentConfig.
-//   native mode: CRUSOE_VPC_ID, CRUSOE_VPC_PREFIX_RESERVATION_ID and
+//     CRUSOE_VPC_PREFIX_RESERVATION_IDS is set anyway → ErrInconsistentConfig.
+//   native mode: CRUSOE_VPC_ID, CRUSOE_VPC_PREFIX_RESERVATION_IDS and
 //     CRUSOE_PROJECT_ID must all be non-empty, else
-//     fmt.Errorf("%w: %s", ErrMissingConfig, name). Location is always
-//     derived from instance metadata (§5.1), never from env.
+//     fmt.Errorf("%w: %s", ErrMissingConfig, name). Location never comes from
+//     env: it is resolved at startup from the cluster object (§5.1).
 func LoadConfigFromEnv() (*Config, error)
 ```
 
@@ -618,15 +620,15 @@ Create-only. `reconcile(ctx, nodeName)` — numbered; every step is idempotent a
   - `IN_PROGRESS` (tracker still pending) → return `(PollInterval, nil)`.
   - `SUCCEEDED` → `state.allocationID = op.AllocationIDs[0]`, observe `crusoe_pod_cidr_allocation_provision_seconds` (if `createStart` nonzero), go to C9.
   - `FAILED` (OVN/DB failure — the only kind that lands in an operation result) → patch Node to **clear op-id label**, emit `AllocationCreateFailed` Warning event with `op.Error`, `..._reconcile_total{result="error"}`, return err → rate-limited retry re-creates (create is contractually idempotent, safe to re-issue).
-  - **Op expired/unknown SDN-side** (tracker dropped it after misses, §7.1 step 4): fall back to `ListPodCIDRAllocations(DestinationCIDR: podCIDRs[0], VPCPrefixReservationIDs: [cfg.VPCPrefixReservationID])`:
+  - **Op expired/unknown SDN-side** (tracker dropped it after misses, §7.1 step 4): fall back to `ListPodCIDRAllocations(DestinationCIDR: podCIDRs[0], VPCPrefixReservationIDs: cfg.VPCPrefixReservationIDs)`:
     - allocation exists with **our** NIC → adopt id, go to C9 (create succeeded, op history lost).
     - exists with a **different** NIC → C10 (conflict).
     - absent → clear op-id label, go to C8 (re-create).
-- **C7.** **No label** and not ready — the create may have succeeded before the label write (crash window), so **List before create**: `ListPodCIDRAllocations(DestinationCIDR: podCIDRs[0], VPCPrefixReservationIDs: [cfg.VPCPrefixReservationID])` (both filters bounding, satisfies the ≥1-bounding-filter rule):
+- **C7.** **No label** and not ready — the create may have succeeded before the label write (crash window), so **List before create**: `ListPodCIDRAllocations(DestinationCIDR: podCIDRs[0], VPCPrefixReservationIDs: cfg.VPCPrefixReservationIDs)` (both filters bounding, satisfies the ≥1-bounding-filter rule):
   - found, NIC == ours → adopt id, go to C9.
   - found, NIC ≠ ours → C10 (the /24-reuse race, or a leak — same handling).
   - absent → C8.
-- **C8.** **Create**: `CreatePodCIDRAllocations{Allocations: [{cfg.VPCPrefixReservationID, nicID, podCIDRs[0]}], Context: {cfg.ProjectID, cfg.VPCID, cfg.Location}}` (exactly 1 spec — current cap):
+- **C8.** **Create**: pick the reservation via `reservationForCIDR` (single configured id → returned with no lookup, SDN validates containment anyway; several → `ListVPCPrefixReservations` + netip containment — cilium allocated the cidr from exactly one; none containing → error, operator attention), then `CreatePodCIDRAllocations{Allocations: [{rsvID, nicID, podCIDRs[0]}], Context: {cfg.ProjectID, cfg.VPCID, cfg.Location}}` (exactly 1 spec — current cap):
   - `ErrDestinationConflict` → C10.
   - `ErrInvalidArgument` / other validation → permanent: `AllocationCreateFailed` Warning event, `klog.ErrorS`, return err. (Still rate-limited requeue — the 1000s cap makes this a slow retry, not a hot loop; a config/reservation fix is needed for it to ever succeed.)
   - Retryable (`ErrUnavailable`) or transport error → return err.
@@ -650,7 +652,7 @@ Edge-case table:
 | Multiple podCIDRs | C2: route `[0]`, warn once |
 | Node object missing | C3/C8/C9: create allocation anyway; label+condition+taint deferred to Node Add event |
 | NIC lookup failure | C4: wrapped error, rate-limited retry |
-| No NIC matches `CRUSOE_VPC_ID` | `resolveNIC`: NIC[0] + warning |
+| No NIC matches `CRUSOE_VPC_ID` | `resolveNIC`: hard retryable error naming the VPC and NICs found (a fallback pick can only fail downstream with a less actionable SDN validation error) |
 | Create op FAILED (OVN/DB) | C6: clear label, event, error → backoff → idempotent re-create |
 | Validation failure on create | C8: permanent — event + slow rate-limited retry; needs operator fix |
 | `DESTINATION_ALLOCATED_TO_ANOTHER_INTERFACE` | C10: event + conflict metric + backoff; node stays tainted; self-resolves on VM delete; reaper backstop |
@@ -664,6 +666,10 @@ Edge-case table:
 
 The reaper is the **only** defense against leaked allocations (VM alive after `kubectl delete node`; VM-delete flows that failed after NIC teardown). It is also the sole caller of `DeletePodCIDRAllocations`.
 
+**Kill switch (revision e):** the sweep goroutine is behind an in-code constant `reaperEnabled = false` (reaper.go) — deletion stays off until `DeletePodCIDRAllocations` behavior is validated against the real SDN service. Flip the constant to re-enable; the code and tests stay live either way.
+
+**Fail-closed principle (revision e):** the reaper never deletes on partial knowledge. Any failure to build the complete desired state — CiliumNode lister error, unstructured-conversion error — aborts the whole pass (a live node silently dropped from desired would make its established allocation look like a deletable orphan, and the grace period would not protect it: grace keys on `CreatedAt`, which is ancient for an established node). A NIC-resolution failure keeps the node's entry with an empty NIC id: the cidr stays protected from deletion and from NIC-mismatch comparison; only that comparison is skipped for the pass.
+
 ```go
 // runReaper blocks; started from Run as its own goroutine via
 // wait.UntilWithContext(ctx, c.reapOnce, c.cfg.ReaperInterval)
@@ -673,10 +679,10 @@ func (c *RouteController) reapOnce(ctx context.Context)
 
 Per pass (location is always set — startup fails without it, §5.1):
 
-1. **Desired**: list CiliumNodes from lister; for each live one (no `deletionTimestamp`) with non-empty `podCIDRs`, compute `desired[podCIDRs[0]] = nicID` (from `state` cache; on cache miss resolve via `resolveNIC`, on failure skip that node with a warning — never guess).
-2. **Actual**: `ListPodCIDRAllocations(VPCPrefixReservationIDs: [cfg.VPCPrefixReservationID])` (bounding filter satisfied). Error → log, abort pass (next tick retries).
+1. **Desired**: list CiliumNodes from lister (error → abort pass); for each live one (no `deletionTimestamp`) with non-empty `podCIDRs`, compute `desired[podCIDRs[0]] = {nicID, nodeName}` (from `state` cache; on cache miss resolve via `resolveNIC`, on failure keep the entry with empty nicID — cidr protected, NIC checks skipped — never guess, never drop).
+2. **Actual**: `ListPodCIDRAllocations(VPCPrefixReservationIDs: cfg.VPCPrefixReservationIDs)` (bounding filter satisfied). Error → log, abort pass (next tick retries).
 3. Set gauges: `crusoe_pod_cidr_allocations_desired = len(desired)`, `crusoe_pod_cidr_allocations_actual = len(actual)`.
-4. **Orphans & NIC mismatches**: an allocation is a delete candidate if its `DestinationCIDR ∉ desired` (orphan) **or** `desired[cidr] != alloc.NetworkInterfaceID` (node replaced, /24 reused — delete-then-recreate). **Grace period**: skip candidates with `CreatedAt` within `cfg.ReaperGrace` (default 10m) — protects against racing joins (informer lag between SDN state and CiliumNode listing) and VM deletes already in flight that will remove the allocation themselves. Delete survivors via `DeletePodCIDRAllocations` in chunks of ≤50 ids (all-or-nothing per chunk; intent-based, so ids deleted concurrently by a VM delete are skipped as success). Do not poll the op; the next pass verifies absence. Chunk-level `ErrNotFound` (an id in another vpc/location — should be impossible since we listed within the reservation) → log at Error, abort remaining chunks, next pass re-lists. For each deletion emit `OrphanedAllocationDeleted`: Normal event on the owning Node when one exists (NIC-mismatch case), else structured klog only.
+4. **Orphans & NIC mismatches**: an allocation is a delete candidate if its `DestinationCIDR ∉ desired` (orphan) **or** `desired[cidr] != alloc.NetworkInterfaceID` (node replaced, /24 reused — delete-then-recreate). **Grace period**: skip candidates with `CreatedAt` within `cfg.ReaperGrace` (default 10m) — protects against racing joins (informer lag between SDN state and CiliumNode listing) and VM deletes already in flight that will remove the allocation themselves. **Per-pass cap**: at most 50 deletions per pass (blast-radius insurance against desired-state bugs; a legitimate backlog drains across passes, logged when the cap bites). Delete survivors via `DeletePodCIDRAllocations` in chunks of ≤50 ids (all-or-nothing per chunk; intent-based, so ids deleted concurrently by a VM delete are skipped as success). Do not poll the op; the next pass verifies absence. Chunk-level `ErrNotFound` (an id in another vpc/location — should be impossible since we listed within the reservation) → log at Error, abort remaining chunks, next pass re-lists. For each deletion emit `OrphanedAllocationDeleted`: Normal event on the owning Node when one exists (NIC-mismatch case), else structured klog only.
 5. **Missing** (desired cidr ∉ actual) and post-delete NIC-mismatch nodes: `queue.Add(nodeName)` — creation always flows through the single reconcile path (C7/C8), so the reaper never races the state machine on creates.
 
 The reaper plus 30m informer resyncs make the system level-triggered end to end.
@@ -742,7 +748,7 @@ The current release manifest binds the CCM ServiceAccount to `cluster-admin` (`r
   verbs: ["create", "patch"]
 ```
 
-Deployment env (native mode; rendered by addon-controller MR 57 alongside the existing `CRUSOE_*` block at v0.1.2.yaml:74-95): `CRUSOE_ROUTING_MODE`, `CRUSOE_VPC_PREFIX_RESERVATION_ID`, `CRUSOE_VPC_ID` — exactly these three, all-or-none (§5). `CRUSOE_PROJECT_ID` is already rendered (v0.1.2.yaml:76). Location and the context's project id are derived from instance metadata (§5.1) — no further env needed. The real client's region address + mTLS material follow the kubernetes-manager `grpcutil` convention and arrive with the real-client MR (§17), not as reserved env here.
+Deployment env (native mode; rendered by addon-controller MR 57 alongside the existing `CRUSOE_*` block at v0.1.2.yaml:74-95): `CRUSOE_ROUTING_MODE`, `CRUSOE_VPC_PREFIX_RESERVATION_IDS` (comma-separated, creation order), `CRUSOE_VPC_ID` — exactly these three, all-or-none (§5). `CRUSOE_PROJECT_ID` is already rendered (v0.1.2.yaml:76). The context's project id comes from `CRUSOE_PROJECT_ID`; location is resolved fail-fast at startup from the cluster object via `--cluster-name` (§5.1) — no further env needed. The real client's region address + mTLS material follow the kubernetes-manager `grpcutil` convention and arrive with the real-client MR (§17), not as reserved env here.
 
 ## 15. Testing Strategy
 
@@ -753,10 +759,10 @@ Runner: `make test` (Makefile, `-race -cover`); lint: `make lint`. Existing test
 | `sdn` fake | plain Go tests | intent-based contract: identical duplicate create = success without a second row; conflicting-NIC create → `ErrDestinationConflict`; `ConflictCIDRs` knob; delete of unknown ids = success; >1 create spec / >50 delete ids / unbounded List → `ErrInvalidArgument`; batch op poll (`PendingPolls`); `FailNext` → FAILED + rollback; List filter intersection + destination ordering |
 | `ciliumnode.go` | fixture test | `testdata/ciliumnode.json` (captured object) → conversion asserts name/deletionTimestamp/`spec.ipam.podCIDRs`; malformed / missing-ipam variants |
 | `config.go` | table-driven | overlay default; native with all vars; native missing each var → `ErrMissingConfig`; overlay + stray `CRUSOE_VPC_ID` → `ErrInconsistentConfig` |
-| `nic.go` | `mock_client.MockAPIClient` (pattern `internal/client/mock/client.go`) | providerID path, SystemUUID path, name fallback, network match, NIC[0] fallback, zero-NIC error; startup location from `GetClusterByName` (match by name → `.Location`; lookup failure non-fatal); instance-location fallback when empty + mismatch warning when set |
+| `nic.go` | `mock_client.MockAPIClient` (pattern `internal/client/mock/client.go`) | providerID path, SystemUUID path, name fallback, network match, no-NIC-in-VPC hard error, zero-NIC error; startup location from `GetClusterByName` (match by name → `.Location`; lookup failure non-fatal); instance-location fallback when empty + mismatch warning when set |
 | `opTracker` | fake + fake workqueue | N pending ops → exactly ONE `ListPodCIDRAllocationOperations` call per tick (assert via fake call log); terminal op → result stashed + nodeKey enqueued; unknown op dropped after 3 misses + enqueued; empty pending → zero RPCs |
 | reconcile state machine | `k8sfake.NewSimpleClientset` + `dynamicfake` (`vendor/k8s.io/client-go/dynamic/fake/simple.go`) + `LoggingFakeClient` + gomock APIClient; drive `reconcile()` directly (no informers — inject listers built from `cache.NewIndexer`) | happy path C1→C11 incl. write ordering (clientset action list: op-id label patch before any poll; condition PATCH before the final patch; final patch simultaneously removes taint, clears op-id, sets epoch ready-at — value asserted to parse as integer seconds and to pass label-value validation); poll requeue while `PendingPolls>0`; `FailNext` → label cleared + event + error → idempotent recreate; conflict path (knob) → event once + counter + backoff + taint retained; crash recovery: (i) op-id label present + op SUCCEEDED, (ii) op-id present + op expired → List adopt, (iii) no label + allocation pre-seeded in fake → adopt without create; Node absent → allocation created, finalize deferred; CiliumNode deleted → assert **zero** SDN calls; multiple podCIDRs |
-| reaper | same harness | orphan past grace deleted (batched, chunk ≤50 asserted with >50 fixtures); young allocation (within grace) spared; NIC-mismatch deleted + node enqueued; missing enqueued; gauges set; List error aborts pass; location-undervied pass skipped |
+| reaper | same harness | orphan past grace deleted; per-pass 50-deletion cap asserted with 120 fixtures draining across passes; young allocation (within grace) spared; NIC-mismatch deleted + node enqueued; missing enqueued; unresolved NIC protects its cidr (fail closed); gauges set; List error aborts pass |
 | envtest-style (optional, follow-up) | real informers against fake clients, `Run()` end-to-end | event handler → queue → worker → tracker wiring, cache-sync gating |
 
 Fake knobs used deliberately: `PendingPolls` proves the controller re-enqueues instead of blocking; `FailNext` proves FAILED→recreate; `ConflictCIDRs` proves the /24-reuse race handling.

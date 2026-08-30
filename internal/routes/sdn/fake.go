@@ -53,6 +53,8 @@ type LoggingFakeClient struct {
 	// returns ErrDestinationConflict, simulating a stale allocation held by a
 	// dead VM's NIC. Test knob for the /24-reuse race.
 	ConflictCIDRs map[string]bool
+	// Reservations backs ListVPCPrefixReservations. Test knob.
+	Reservations []VPCPrefixReservation
 }
 
 // NewLoggingFakeClient returns an empty LoggingFakeClient with default knobs.
@@ -237,6 +239,25 @@ func (f *LoggingFakeClient) ListPodCIDRAllocationOperations(
 	sort.Slice(out, func(i, j int) bool { return out[i].OperationID < out[j].OperationID })
 
 	f.logListOps(&q, out)
+
+	return out, nil
+}
+
+// ListVPCPrefixReservations returns the knob-configured reservations matching
+// ids.
+func (f *LoggingFakeClient) ListVPCPrefixReservations(
+	_ context.Context, ids []string,
+) ([]VPCPrefixReservation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]VPCPrefixReservation, 0, len(ids))
+	for i := range f.Reservations {
+		if slices.Contains(ids, f.Reservations[i].ID) {
+			out = append(out, f.Reservations[i])
+		}
+	}
+	f.logListReservations(ids, len(out))
 
 	return out, nil
 }

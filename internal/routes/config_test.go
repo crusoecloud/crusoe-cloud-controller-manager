@@ -2,13 +2,14 @@ package routes
 
 import (
 	"errors"
+	"slices"
 	"testing"
 )
 
 const (
 	envRoutingMode  = "CRUSOE_ROUTING_MODE"
 	envVPCID        = "CRUSOE_VPC_ID"
-	envReservation  = "CRUSOE_VPC_PREFIX_RESERVATION_ID"
+	envReservation  = "CRUSOE_VPC_PREFIX_RESERVATION_IDS"
 	envProjectID    = "CRUSOE_PROJECT_ID"
 	testVPCID       = "net-abc"
 	testReservation = "rsv-pods"
@@ -31,7 +32,7 @@ func checkOverlay(t *testing.T, cfg *Config) {
 
 func checkNative(t *testing.T, cfg *Config) {
 	t.Helper()
-	if cfg.VPCID != testVPCID || cfg.VPCPrefixReservationID != testReservation ||
+	if cfg.VPCID != testVPCID || !slices.Equal(cfg.VPCPrefixReservationIDs, []string{testReservation}) ||
 		cfg.ProjectID != testProjectID {
 
 		t.Fatalf("native config not populated: %+v", cfg)
@@ -70,6 +71,21 @@ func configCases() []configCase {
 			check: checkOverlay,
 		},
 		{name: "native with all vars", env: nativeEnv(), check: checkNative},
+		{
+			name: "native with multiple reservations",
+			env: func() map[string]string {
+				m := nativeEnv()
+				m[envReservation] = " rsv-a, rsv-b ,rsv-c,"
+
+				return m
+			}(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if !slices.Equal(cfg.VPCPrefixReservationIDs, []string{"rsv-a", "rsv-b", "rsv-c"}) {
+					t.Fatalf("expected trimmed 3-id list, got %v", cfg.VPCPrefixReservationIDs)
+				}
+			},
+		},
 		{name: "native missing vpc id", env: withoutKey(envVPCID), wantErr: ErrMissingConfig},
 		{name: "native missing reservation", env: withoutKey(envReservation), wantErr: ErrMissingConfig},
 		{name: "native missing project id", env: withoutKey(envProjectID), wantErr: ErrMissingConfig},

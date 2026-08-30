@@ -2,6 +2,7 @@ package routes
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -29,11 +30,11 @@ const (
 
 func rcConfig() *Config {
 	return &Config{
-		ProjectID:              rcProject,
-		VPCID:                  rcVPC,
-		VPCPrefixReservationID: rcRsv,
-		Location:               rcLoc,
-		PollInterval:           5 * time.Second,
+		ProjectID:               rcProject,
+		VPCID:                   rcVPC,
+		VPCPrefixReservationIDs: []string{rcRsv},
+		Location:                rcLoc,
+		PollInterval:            5 * time.Second,
 	}
 }
 
@@ -534,4 +535,45 @@ func (s *strictNoCallSDN) ListPodCIDRAllocationOperations(
 	s.t.Fatalf("unexpected ListPodCIDRAllocationOperations call")
 
 	return nil, nil
+}
+
+func (s *strictNoCallSDN) ListVPCPrefixReservations(
+	context.Context, []string,
+) ([]sdn.VPCPrefixReservation, error) {
+	s.t.Fatalf("unexpected ListVPCPrefixReservations call")
+
+	return nil, nil
+}
+
+// TestReservationForCIDR covers the create-time reservation pick: single
+// reservation short-circuits with no lookup; multiple reservations (post
+// pod-range expansion) resolve by cidr containment; no containing reservation
+// is an error.
+func TestReservationForCIDR(t *testing.T) {
+	t.Parallel()
+
+	fakeSDN := sdn.NewLoggingFakeClient()
+	fakeSDN.Reservations = []sdn.VPCPrefixReservation{
+		{ID: "rsv-a", Prefix: "10.100.0.0/16"},
+		{ID: "rsv-b", Prefix: "10.200.0.0/16"},
+	}
+
+	single := newTestController(rcConfig(), nil)
+	single.sdn = &strictNoCallSDN{t: t} // single id must not trigger any RPC
+	if got, err := single.reservationForCIDR(context.Background(), rcCIDR); err != nil || got != rcRsv {
+		t.Fatalf("single reservation should be returned without lookup, got %q err %v", got, err)
+	}
+
+	cfg := rcConfig()
+	cfg.VPCPrefixReservationIDs = []string{"rsv-a", "rsv-b"}
+	multi := newTestController(cfg, nil)
+	multi.sdn = fakeSDN
+
+	if got, err := multi.reservationForCIDR(context.Background(), "10.200.4.0/24"); err != nil || got != "rsv-b" {
+		t.Fatalf("expected containment pick rsv-b, got %q err %v", got, err)
+	}
+	_, err := multi.reservationForCIDR(context.Background(), "192.168.0.0/24")
+	if !errors.Is(err, ErrNoReservationForCIDR) {
+		t.Fatalf("expected ErrNoReservationForCIDR, got %v", err)
+	}
 }

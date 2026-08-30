@@ -93,10 +93,12 @@ func (t *opTracker) pendingIDs() []string {
 }
 
 // recordResults processes a batch of ops returned by a poll: terminal ops move
-// pending -> results and their node is dispatched; ops absent from the returned
-// set have their miss counter incremented and are dropped (and dispatched) after
-// maxOpMisses. Returns nothing; it mutates tracker state and calls enqueue.
-func (t *opTracker) recordResults(ops []sdn.Operation, enqueue func(nodeKey string)) {
+// pending -> results and their node is dispatched; QUERIED ops absent from the
+// returned set have their miss counter incremented and are dropped (and
+// dispatched) after maxOpMisses. Ops registered after the query snapshot are
+// not miss-counted — they were never asked for. Returns nothing; it mutates
+// tracker state and calls enqueue.
+func (t *opTracker) recordResults(queried []string, ops []sdn.Operation, enqueue func(nodeKey string)) {
 	t.mu.Lock()
 
 	seen := make(map[string]bool, len(ops))
@@ -118,9 +120,10 @@ func (t *opTracker) recordResults(ops []sdn.Operation, enqueue func(nodeKey stri
 		toDispatch = append(toDispatch, tracked.nodeKey)
 	}
 
-	// Ops we did not see this pass: count a miss, drop after the limit.
-	for id, tracked := range t.pending {
-		if seen[id] {
+	// Queried ops we did not see this pass: count a miss, drop after the limit.
+	for _, id := range queried {
+		tracked, ok := t.pending[id]
+		if !ok || seen[id] {
 			continue
 		}
 		tracked.misses++
@@ -160,5 +163,5 @@ func (c *RouteController) pollOpsOnce(ctx context.Context) {
 		return
 	}
 
-	c.tracker.recordResults(ops, c.enqueue)
+	c.tracker.recordResults(ids, ops, c.enqueue)
 }

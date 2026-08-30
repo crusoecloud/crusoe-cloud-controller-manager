@@ -92,6 +92,15 @@ type ListPodCIDRAllocationsQuery struct {
 	DestinationCIDR         string // exact match
 }
 
+// VPCPrefixReservation mirrors the KM-owned reservation object
+// (VPCPrefixReservationManagement, schemas MR 4113) — only the fields the CCM
+// needs to map a pod cidr to its containing reservation after a pod-range
+// expansion adds a second reservation.
+type VPCPrefixReservation struct {
+	ID     string
+	Prefix string // the reserved range allocations are carved from
+}
+
 // ListPodCIDRAllocationOperationsQuery filters operations. It supports repeated
 // operation_ids so ONE call covers every in-flight operation (the opTracker
 // relies on this).

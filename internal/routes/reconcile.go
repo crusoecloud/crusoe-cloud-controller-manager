@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes/sdn"
@@ -119,11 +120,9 @@ func (c *RouteController) resumeOp(
 		if c.tracker.isTracking(opID) {
 			return c.cfg.PollInterval, nil // still IN_PROGRESS
 		}
-		// Tracker dropped it (misses) or never knew it (failover): re-register and
-		// fall back to List-based recovery.
-		c.tracker.Track(opID, nodeName)
-
-		return c.recoverFromList(ctx, nodeName, node, opID, cidr)
+		// Tracker dropped it (misses) or never knew it (failover): fall back to
+		// List-based recovery.
+		return c.recoverFromList(ctx, nodeName, node, cidr)
 	}
 
 	switch op.State {
@@ -138,16 +137,15 @@ func (c *RouteController) resumeOp(
 	}
 }
 
-// recoverFromList handles a resumed op whose history is lost: clear the stale
-// op-id label, then List by destination_cidr to decide adopt / conflict /
-// recreate. Clearing up front is end-state equivalent to the per-branch clears
-// it replaces: adopt's finalize clears the label, create re-patches it, and a
+// recoverFromList handles a resumed op whose history is lost (the tracker has
+// neither a registration nor a result for it): clear the stale op-id label,
+// then List by destination_cidr to decide adopt / conflict / recreate.
+// Clearing up front is end-state equivalent to the per-branch clears it
+// replaces: adopt's finalize clears the label, create re-patches it, and a
 // conflict leaves it cleared (C7's List re-finds the allocation on retry).
 func (c *RouteController) recoverFromList(
-	ctx context.Context, nodeName string, node *v1.Node, opID, cidr string,
+	ctx context.Context, nodeName string, node *v1.Node, cidr string,
 ) (time.Duration, error) {
-	c.tracker.Forget(opID)
-
 	if err := c.clearOpIDIfNode(ctx, node); err != nil {
 		return 0, err
 	}
@@ -193,9 +191,14 @@ func (c *RouteController) onOpFailed(
 func (c *RouteController) createAllocation(
 	ctx context.Context, nodeName string, node *v1.Node, nicID, cidr string,
 ) (time.Duration, error) {
+	rsvID, err := c.reservationForCIDR(ctx, cidr)
+	if err != nil {
+		return 0, err
+	}
+
 	req := sdn.CreatePodCIDRAllocationsRequest{
 		Allocations: []sdn.PodCIDRAllocationSpec{
-			{VPCPrefixReservationID: c.cfg.VPCPrefixReservationID, NetworkInterfaceID: nicID, DestinationCIDR: cidr},
+			{VPCPrefixReservationID: rsvID, NetworkInterfaceID: nicID, DestinationCIDR: cidr},
 		},
 		Context: sdn.PodCIDRAllocationContext{
 			ProjectID: c.cfg.ProjectID, VPCNetworkID: c.cfg.VPCID, Location: c.cfg.Location,
@@ -264,12 +267,12 @@ func (c *RouteController) handleConflict(nodeName string, node *v1.Node) (time.D
 		nodeName, sdn.ErrDestinationConflict)
 }
 
-// lookupAllocation lists by destination cidr within the reservation (both
-// bounding filters) and returns the single allocation if present.
+// lookupAllocation lists by destination cidr within the configured reservations
+// (both bounding filters) and returns the single allocation if present.
 func (c *RouteController) lookupAllocation(ctx context.Context, cidr string) (sdn.PodCIDRAllocation, bool, error) {
 	allocs, err := c.sdn.ListPodCIDRAllocations(ctx, sdn.ListPodCIDRAllocationsQuery{
 		DestinationCIDR:         cidr,
-		VPCPrefixReservationIDs: []string{c.cfg.VPCPrefixReservationID},
+		VPCPrefixReservationIDs: c.cfg.VPCPrefixReservationIDs,
 	})
 	if err != nil {
 		return sdn.PodCIDRAllocation{}, false, fmt.Errorf("failed to list allocation for cidr %s: %w", cidr, err)
@@ -279,6 +282,47 @@ func (c *RouteController) lookupAllocation(ctx context.Context, cidr string) (sd
 	}
 
 	return allocs[0], true, nil
+}
+
+// ErrNoReservationForCIDR indicates no configured reservation contains the
+// node's pod cidr (reservation/env drift; needs operator attention).
+var ErrNoReservationForCIDR = errors.New("no configured vpc prefix reservation contains pod cidr")
+
+// reservationForCIDR picks the configured reservation containing cidr. With a
+// single configured reservation (the pre-expansion norm) it is returned with no
+// lookup — SDN validates containment on create anyway. With several (pod-range
+// expansion adds reservations; there is no resize), the reservation ranges are
+// fetched and matched by containment: cilium allocated the cidr from exactly
+// one of them.
+func (c *RouteController) reservationForCIDR(ctx context.Context, cidr string) (string, error) {
+	ids := c.cfg.VPCPrefixReservationIDs
+	if len(ids) == 1 {
+		return ids[0], nil
+	}
+
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse pod cidr %s: %w", cidr, err)
+	}
+
+	rsvs, err := c.sdn.ListVPCPrefixReservations(ctx, ids)
+	if err != nil {
+		return "", fmt.Errorf("failed to list vpc prefix reservations: %w", err)
+	}
+	for i := range rsvs {
+		p, perr := netip.ParsePrefix(rsvs[i].Prefix)
+		if perr != nil {
+			klog.ErrorS(perr, "skipping reservation with unparseable prefix",
+				"reservationID", rsvs[i].ID, "prefix", rsvs[i].Prefix)
+
+			continue
+		}
+		if p.Bits() <= prefix.Bits() && p.Contains(prefix.Addr()) {
+			return rsvs[i].ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: %s (reservations %v)", ErrNoReservationForCIDR, cidr, ids)
 }
 
 // fetchCiliumNode gets and converts the CiliumNode. gone is true when the object

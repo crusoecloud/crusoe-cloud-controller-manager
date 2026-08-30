@@ -103,10 +103,9 @@ func (a *APIClientImpl) GetInstanceByID(ctx context.Context,
 	return &instances.Items[0], response, nil
 }
 
-// GetClusterByName lists the Kubernetes clusters in the project and returns the
-// one whose Name matches (cluster names are unique per project). It follows the
-// list-and-filter pattern of GetInstanceByName because the ListClusters API has
-// no server-side name filter.
+// GetClusterByName lists the Kubernetes clusters in the project filtered
+// server-side by name and returns the exact match (cluster names are unique
+// per project).
 func (a *APIClientImpl) GetClusterByName(ctx context.Context,
 	projectID, name string,
 ) (*crusoeapi.KubernetesCluster, error) {
