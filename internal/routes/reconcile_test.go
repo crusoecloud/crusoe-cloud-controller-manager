@@ -573,21 +573,20 @@ func TestReservationForCIDR(t *testing.T) {
 		{ID: "rsv-b", Prefix: "10.200.0.0/16"},
 	}
 
-	single := newTestController(rcConfig(), nil)
-	single.sdn = &strictNoCallSDN{t: t} // single id must not trigger any RPC
-	if got, err := single.reservationForCIDR(context.Background(), rcCIDR); err != nil || got != rcRsv {
+	// single id must not trigger any RPC
+	if got, err := reservationForCIDR(
+		context.Background(), &strictNoCallSDN{t: t}, rcConfig().VPCPrefixReservationIDs, rcCIDR,
+	); err != nil || got != rcRsv {
 		t.Fatalf("single reservation should be returned without lookup, got %q err %v", got, err)
 	}
 
-	cfg := rcConfig()
-	cfg.VPCPrefixReservationIDs = []string{"rsv-a", "rsv-b"}
-	multi := newTestController(cfg, nil)
-	multi.sdn = fakeSDN
-
-	if got, err := multi.reservationForCIDR(context.Background(), "10.200.4.0/24"); err != nil || got != "rsv-b" {
+	multiIDs := []string{"rsv-a", "rsv-b"}
+	if got, err := reservationForCIDR(
+		context.Background(), fakeSDN, multiIDs, "10.200.4.0/24",
+	); err != nil || got != "rsv-b" {
 		t.Fatalf("expected containment pick rsv-b, got %q err %v", got, err)
 	}
-	_, err := multi.reservationForCIDR(context.Background(), "192.168.0.0/24")
+	_, err := reservationForCIDR(context.Background(), fakeSDN, multiIDs, "192.168.0.0/24")
 	if !errors.Is(err, ErrNoReservationForCIDR) {
 		t.Fatalf("expected ErrNoReservationForCIDR, got %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	crusoeapi "github.com/crusoecloud/client-go/swagger/v1alpha5"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/instances"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
@@ -39,12 +40,12 @@ func (c *RouteController) resolveNIC(ctx context.Context, nodeName string, node 
 		return st.nicID, nil
 	}
 
-	inst, err := c.resolveInstance(ctx, nodeName, node)
+	inst, err := resolveInstance(ctx, c.apiClient, nodeName, node)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve NIC for node %s: %w", nodeName, err)
 	}
 
-	c.warnMetadataMismatch(inst)
+	warnMetadataMismatch(inst, c.cfg)
 
 	nicID, err := selectNICID(inst, c.cfg.VPCID)
 	if err != nil {
@@ -58,15 +59,15 @@ func (c *RouteController) resolveNIC(ctx context.Context, nodeName string, node 
 
 // resolveInstance fetches the instance backing nodeName using providerID, then
 // SystemUUID, then name, mirroring internal/instances resolution.
-func (c *RouteController) resolveInstance(ctx context.Context, nodeName string, node *v1.Node,
+func resolveInstance(ctx context.Context, apiClient client.APIClient, nodeName string, node *v1.Node,
 ) (*crusoeapi.InstanceV1Alpha5, error) {
 	if node != nil {
-		if inst := c.instanceByID(ctx, nodeName, node); inst != nil {
+		if inst := instanceByID(ctx, apiClient, nodeName, node); inst != nil {
 			return inst, nil
 		}
 	}
 
-	inst, err := c.apiClient.GetInstanceByName(ctx, nodeName)
+	inst, err := apiClient.GetInstanceByName(ctx, nodeName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get instance by name %s: %w", nodeName, err)
 	}
@@ -76,15 +77,15 @@ func (c *RouteController) resolveInstance(ctx context.Context, nodeName string, 
 
 // instanceByID attempts the id-based lookup, returning nil (and logging) on any
 // miss so the caller falls back to the name lookup.
-func (c *RouteController) instanceByID(
-	ctx context.Context, nodeName string, node *v1.Node,
+func instanceByID(
+	ctx context.Context, apiClient client.APIClient, nodeName string, node *v1.Node,
 ) *crusoeapi.InstanceV1Alpha5 {
 	id := instanceIDFromNode(node)
 	if id == "" {
 		return nil
 	}
 
-	inst, resp, err := c.apiClient.GetInstanceByID(ctx, id)
+	inst, resp, err := apiClient.GetInstanceByID(ctx, id)
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
 	}
@@ -135,14 +136,14 @@ func selectNICID(inst *crusoeapi.InstanceV1Alpha5, vpcID string) (string, error)
 // (location resolves fail-fast at startup, §5.1), so no lock is needed: this
 // is a read-only sanity check, and a mismatch means a mis-rendered
 // --cluster-name or CRUSOE_PROJECT_ID.
-func (c *RouteController) warnMetadataMismatch(inst *crusoeapi.InstanceV1Alpha5) {
-	if inst.ProjectId != "" && inst.ProjectId != c.cfg.ProjectID {
+func warnMetadataMismatch(inst *crusoeapi.InstanceV1Alpha5, cfg *Config) {
+	if inst.ProjectId != "" && inst.ProjectId != cfg.ProjectID {
 		klog.Warningf("instance project id %s differs from CRUSOE_PROJECT_ID %s (check deployment env)",
-			inst.ProjectId, c.cfg.ProjectID)
+			inst.ProjectId, cfg.ProjectID)
 	}
-	if inst.Location != "" && inst.Location != c.cfg.Location {
+	if inst.Location != "" && inst.Location != cfg.Location {
 		klog.Warningf("instance location %s differs from cluster location %s (check --cluster-name rendering)",
-			inst.Location, c.cfg.Location)
+			inst.Location, cfg.Location)
 	}
 }
 
