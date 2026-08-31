@@ -176,7 +176,7 @@ func TestCreate_ConflictCIDRKnob(t *testing.T) {
 	}
 }
 
-func TestCreate_FailNextRollsBack(t *testing.T) {
+func TestCreate_FailNextKeepsRow(t *testing.T) {
 	t.Parallel()
 	f := sdn.NewLoggingFakeClient()
 	f.FailNext = true
@@ -191,14 +191,15 @@ func TestCreate_FailNextRollsBack(t *testing.T) {
 	if resolved.Error == "" {
 		t.Fatalf("expected error detail on FAILED op")
 	}
-	// Row rolled back.
+	// The server does not roll back on OVN failure: the row survives a FAILED
+	// create, so a retry converges on the same row (adopt, not re-create).
 	allocs, err := f.ListPodCIDRAllocations(context.Background(),
 		sdn.ListPodCIDRAllocationsQuery{DestinationCIDR: testCIDR})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(allocs) != 0 {
-		t.Fatalf("FailNext left %d rows, want 0 (rollback)", len(allocs))
+	if len(allocs) != 1 {
+		t.Fatalf("FailNext left %d rows, want 1 (no rollback)", len(allocs))
 	}
 	// FailNext auto-clears.
 	if f.FailNext {

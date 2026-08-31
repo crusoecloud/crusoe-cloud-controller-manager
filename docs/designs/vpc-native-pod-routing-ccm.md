@@ -12,6 +12,8 @@ RFC: CRUSOE-97212. Target repo: `github.com/crusoecloud/crusoe-cloud-controller-
 
 **Revision 2026-08-29 (d).** Startup location resolution is now **fatal on failure** and the instance-derived fallback is removed: `Config` is immutable before any worker goroutine starts, which deletes the mutex around shared config (the lazy fill forced locking; racy lock-free writes — even though all writers converge on the same value in a single-cluster CCM — are still a data race under the Go memory model). Instance metadata remains as a read-only mismatch warning (§5.1). §6.4 records controller-runtime as a considered-and-deferred alternative.
 
+**Revision 2026-08-31 (f).** The **real gRPC SDN client landed** (`internal/routes/sdn/grpc.go`, over `gitlab.com/crusoeenergy/schemas/api/island/v2` v2.216.28). It is the only file that touches pb/grpc types; the seam (`sdn/types.go` + `PodCIDRAllocationClient`), state machine, tracker, reaper, metrics and tests are unchanged. New env `CRUSOE_SDN_ENDPOINT` selects the client: absent → the logging fake is retained (rollout compatibility — addon-controller MR 57 does not render it yet); set + cert trio (`CRUSOE_SDN_CERT_FILE`/`_KEY_FILE`/`_CA_FILE`) absent → plaintext (KM local-dev parity); set + full trio → mTLS. The dial follows the kubernetes-manager `grpcutil` convention (`rpc.SetupMTLS` → `NewClientConnFactory(tlsConfig).NewClientConn(endpoint)`), which brings its client conventions for free (20MB max message, otel interceptors, round_robin, keepalive). Error mapping is reason-based on `google.rpc.ErrorInfo` (domain `region.island.v2`, reason `DESTINATION_ALLOCATED_TO_ANOTHER_INTERFACE` → `ErrDestinationConflict`); `INVALID_ARGUMENT`/`NOT_FOUND`/`UNAVAILABLE`+`ABORTED` map to their sentinels, `UNIMPLEMENTED` is a plain wrapped error (`DeletePodCIDRAllocations` is **not yet served server-side** — the reaper kill switch stays off), and the `codes.FailedPrecondition` bucket only maps to a conflict when the ErrorInfo matches (a location-not-ACTIVE precondition carries no ErrorInfo and stays retryable). The fake was corrected to **match the server**: a FAILED create is **not rolled back** (the row survives; the retry adopts it via C7 List-before-create), superseding the earlier rollback modeling. `go.mod` now carries private `gitlab.com/crusoeenergy/*` deps, so **`GOPRIVATE=gitlab.com/crusoeenergy/*` is required to build**; the module also bumped to `go 1.26.3` (schemas floor).
+
 ## 1. Overview & Scope
 
 In native routing mode, cilium (cluster-pool IPAM) allocates each node a pod /24 from a KM-reserved VPC prefix reservation and records it in `CiliumNode.spec.ipam.podCIDRs`. This controller creates one SDN **pod CIDR allocation** per node — an atomic pair of (static route on the VPC logical router + port_security widening on the node NIC) — and gates scheduling until the allocation is ready. Nodes register with the kubelet-applied taint `crusoe.ai/pods-unroutable=:NoSchedule`; the CCM only ever *removes* it.
@@ -237,8 +239,9 @@ type LoggingFakeClient struct {
 	// PendingPolls: number of ListPodCIDRAllocationOperations observations an
 	// operation stays IN_PROGRESS before flipping terminal. Default 1. Test knob.
 	PendingPolls int
-	// FailNext: if true, the NEXT Create/Delete's operation resolves FAILED
-	// (and the mutation is rolled back); flag auto-clears. Test knob.
+	// FailNext: if true, the NEXT Create/Delete's operation resolves FAILED;
+	// the row is NOT rolled back (server parity, revision f — a failed create
+	// leaves its row for the retry to adopt); flag auto-clears. Test knob.
 	FailNext bool
 	// ConflictCIDRs: destinations for which CreatePodCIDRAllocations returns
 	// ErrDestinationConflict, simulating a stale allocation held by a dead
@@ -254,7 +257,7 @@ Semantics (all methods take the mutex; ids are `uuid.NewString()` — `github.co
 
 | Method | Behavior |
 |---|---|
-| `CreatePodCIDRAllocations` | `len(Allocations) != 1` → `ErrInvalidArgument` (current cap). Destination in `ConflictCIDRs`, or an existing allocation with same destination but **different** NIC → `ErrDestinationConflict` (synchronous, nothing written). An **identical** spec (same reservation+NIC+destination) already allocated → idempotent success: op resolving `SUCCEEDED` referencing the existing id, no second row. Else insert allocation (generated id, `NextHopIP` = `"fake-next-hop"`), op `IN_PROGRESS`, remaining = `PendingPolls`. `FailNext` ⇒ op resolves `FAILED` and the row is rolled back at resolution. |
+| `CreatePodCIDRAllocations` | `len(Allocations) != 1` → `ErrInvalidArgument` (current cap). Destination in `ConflictCIDRs`, or an existing allocation with same destination but **different** NIC → `ErrDestinationConflict` (synchronous, nothing written). An **identical** spec (same reservation+NIC+destination) already allocated → idempotent success: op resolving `SUCCEEDED` referencing the existing id, no second row. Else insert allocation (generated id, `NextHopIP` = `"fake-next-hop"`), op `IN_PROGRESS`, remaining = `PendingPolls`. `FailNext` ⇒ op resolves `FAILED` and the row is **retained** (server parity, revision f — no rollback; the retry adopts it via C7 List-before-create). |
 | `DeletePodCIDRAllocations` | >50 ids → `ErrInvalidArgument`. Unknown ids are **skipped (success)** — never an error. One op for the whole batch; rows removed when it resolves `SUCCEEDED`. `FailNext` ⇒ `FAILED`, rows retained. |
 | `ListPodCIDRAllocations` | No bounding filter set (Location alone doesn't count) → `ErrInvalidArgument`. Applies every set field as an intersecting filter; results sorted by `DestinationCIDR`. Rows pending a delete op are listed until it resolves. |
 | `ListPodCIDRAllocationOperations` | Filters ops (batch `OperationIDs` supported); each matched `IN_PROGRESS` op decrements its remaining counter, flipping terminal at 0 (this is what makes the poll loop observable in tests). |
@@ -283,10 +286,16 @@ const (
 	VPCPrefixReservationIDsEnv = "CRUSOE_VPC_PREFIX_RESERVATION_IDS" // KM-provisioned, comma-separated in creation order
 	// No location env var: location is resolved fail-fast at startup from the
 	// cluster object (§5.1); the context's project id is CRUSOE_PROJECT_ID.
-	// No SDN endpoint/mTLS env vars: the real client is constructed the way
-	// kubernetes-manager builds its region clients (§17) — region address +
-	// rpc.AuthInfo from the schemas grpcutil convention — added by the
-	// real-client MR next to their first use.
+
+	// SDN gRPC wiring (native mode only; landed in revision f, §17). Endpoint
+	// absent ⇒ keep the logging fake; endpoint set + cert trio absent ⇒ plaintext;
+	// endpoint set + full trio ⇒ mTLS. Cert trio is all-or-none and requires the
+	// endpoint (else ErrInconsistentSDNConfig). In overlay mode any of these set
+	// is a misrender (ErrInconsistentSDNConfig).
+	SDNEndpointEnv = "CRUSOE_SDN_ENDPOINT" // host:port of the region gRPC server
+	SDNCertFileEnv = "CRUSOE_SDN_CERT_FILE"
+	SDNKeyFileEnv  = "CRUSOE_SDN_KEY_FILE"
+	SDNCAFileEnv   = "CRUSOE_SDN_CA_FILE"
 
 	RoutingModeOverlay = "overlay"
 	RoutingModeNative  = "native"
@@ -299,6 +308,14 @@ type Config struct {
 	VPCPrefixReservationIDs []string // creation order; creates pick by cidr containment (single id: no lookup)
 	Location                string // resolved fail-fast at startup from the cluster object (§5.1); then immutable
 
+	// SDN gRPC wiring (revision f). Plain strings so config.go stays schemas-free.
+	// Endpoint empty ⇒ keep the logging fake; cert trio empty ⇒ plaintext; full
+	// trio ⇒ mTLS. NewGRPCClient(endpoint, cert, key, ca) constructs the auth.
+	SDNEndpoint string
+	SDNCertFile string
+	SDNKeyFile  string
+	SDNCAFile   string
+
 	PollInterval   time.Duration // default 5s (opTracker tick + AddAfter backstop)
 	ReaperInterval time.Duration // default 5m
 	ReaperGrace    time.Duration // default 10m (§11 step 4 grace period)
@@ -308,6 +325,9 @@ type Config struct {
 var (
 	ErrMissingConfig      = errors.New("missing required environment variable for native routing mode")
 	ErrInconsistentConfig = errors.New("partial native-routing env set (CRUSOE_ROUTING_MODE / CRUSOE_VPC_ID / CRUSOE_VPC_PREFIX_RESERVATION_IDS must be all set or all absent)")
+	// ErrInconsistentSDNConfig (revision f): partial cert trio, a cert var without
+	// CRUSOE_SDN_ENDPOINT, or any SDN var set in overlay mode.
+	ErrInconsistentSDNConfig = errors.New("inconsistent SDN env set (CRUSOE_SDN_CERT_FILE / CRUSOE_SDN_KEY_FILE / CRUSOE_SDN_CA_FILE must be all set or all absent, and require CRUSOE_SDN_ENDPOINT)")
 )
 
 // LoadConfigFromEnv:
@@ -448,7 +468,7 @@ func StartRouteControllerWrapper(initContext app.ControllerInitContext,
 3. Build clients from `completedConfig.Kubeconfig`, same precedent as the node-lifecycle controller which sidesteps per-controller SA credentials (`internal/node/utils.go:39-42`): `clientset.NewForConfig(...)` and `dynamic.NewForConfig(...)` (`vendor/k8s.io/client-go/dynamic/simple.go:75`).
 4. Build the Crusoe API client exactly as `internal/cloud.go:63-71` does (`auth.NewCrusoeClient` + `&client.APIClientImpl{...}`) — the `cloud` parameter does not expose its client, and duplicating 4 lines is cheaper than widening `Cloud`'s surface.
 5. **Resolve location from the cluster object** (§5.1): `apiClient.GetClusterByName(ctx, cfg.ProjectID, completedConfig.ComponentConfig.KubeCloudShared.ClusterName)` → `cfg.Location = cluster.Location`. **Fatal on error** — the InitFunc returns it, aborting CCM startup; the Deployment's crash-loop backoff is the retry. This is what makes `cfg` immutable before any goroutine starts (§5.1 revision d).
-6. `sdnClient := sdn.NewLoggingFakeClient()` — the single line replaced when the real client lands (§14).
+6. `sdnClient, closeSDN, err := buildSDNClient(cfg)` (revision f, §17): endpoint absent ⇒ `sdn.NewLoggingFakeClient()` + loud warning; endpoint set ⇒ `sdn.NewGRPCClient(endpoint, cert, key, ca)` (mTLS when the cert trio is set, plaintext otherwise) with its `Close` wired to `ctx.Done()`. (Originally `sdn.NewLoggingFakeClient()`, "the single line replaced when the real client lands".)
 7. Dynamic informer factory: `dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynClient, 30*time.Minute, metav1.NamespaceAll, nil)` (`vendor/k8s.io/client-go/dynamic/dynamicinformer/informer.go:42`); `ciliumNodeInformer := factory.ForResource(ciliumNodeGVR)` (informer.go:74). Node informer from `completedConfig.SharedInformers.Core().V1().Nodes()` (pattern: `internal/node/utils.go:47`).
 8. `NewRouteController(...)`; `factory.Start(ctx.Done())`; `go rc.Run(ctx, controllerContext.ControllerManagerMetrics)`; `return nil, true, nil`.
 
@@ -748,7 +768,7 @@ The current release manifest binds the CCM ServiceAccount to `cluster-admin` (`r
   verbs: ["create", "patch"]
 ```
 
-Deployment env (native mode; rendered by addon-controller MR 57 alongside the existing `CRUSOE_*` block at v0.1.2.yaml:74-95): `CRUSOE_ROUTING_MODE`, `CRUSOE_VPC_PREFIX_RESERVATION_IDS` (comma-separated, creation order), `CRUSOE_VPC_ID` — exactly these three, all-or-none (§5). `CRUSOE_PROJECT_ID` is already rendered (v0.1.2.yaml:76). The context's project id comes from `CRUSOE_PROJECT_ID`; location is resolved fail-fast at startup from the cluster object via `--cluster-name` (§5.1) — no further env needed. The real client's region address + mTLS material follow the kubernetes-manager `grpcutil` convention and arrive with the real-client MR (§17), not as reserved env here.
+Deployment env (native mode; rendered by addon-controller MR 57 alongside the existing `CRUSOE_*` block at v0.1.2.yaml:74-95): `CRUSOE_ROUTING_MODE`, `CRUSOE_VPC_PREFIX_RESERVATION_IDS` (comma-separated, creation order), `CRUSOE_VPC_ID` — exactly these three, all-or-none (§5). `CRUSOE_PROJECT_ID` is already rendered (v0.1.2.yaml:76). The context's project id comes from `CRUSOE_PROJECT_ID`; location is resolved fail-fast at startup from the cluster object via `--cluster-name` (§5.1) — no further env needed. The real client's region address + mTLS material are the `CRUSOE_SDN_ENDPOINT` / `CRUSOE_SDN_CERT_FILE` / `CRUSOE_SDN_KEY_FILE` / `CRUSOE_SDN_CA_FILE` env (revision f, §17), following the kubernetes-manager `grpcutil` convention. They are **optional** in native mode: absent, the controller keeps the logging fake, so addon-controller can render the endpoint independently of this CCM drop. When rendered, the mount for the cert trio (a mTLS secret) is the addon-controller's to add.
 
 ## 15. Testing Strategy
 
@@ -756,16 +776,16 @@ Runner: `make test` (Makefile, `-race -cover`); lint: `make lint`. Existing test
 
 | Layer | Tooling | Coverage |
 |---|---|---|
-| `sdn` fake | plain Go tests | intent-based contract: identical duplicate create = success without a second row; conflicting-NIC create → `ErrDestinationConflict`; `ConflictCIDRs` knob; delete of unknown ids = success; >1 create spec / >50 delete ids / unbounded List → `ErrInvalidArgument`; batch op poll (`PendingPolls`); `FailNext` → FAILED + rollback; List filter intersection + destination ordering |
+| `sdn` fake | plain Go tests | intent-based contract: identical duplicate create = success without a second row; conflicting-NIC create → `ErrDestinationConflict`; `ConflictCIDRs` knob; delete of unknown ids = success; >1 create spec / >50 delete ids / unbounded List → `ErrInvalidArgument`; batch op poll (`PendingPolls`); `FailNext` → FAILED, row **retained** (no rollback, revision f); List filter intersection + destination ordering |
 | `ciliumnode.go` | fixture test | `testdata/ciliumnode.json` (captured object) → conversion asserts name/deletionTimestamp/`spec.ipam.podCIDRs`; malformed / missing-ipam variants |
 | `config.go` | table-driven | overlay default; native with all vars; native missing each var → `ErrMissingConfig`; overlay + stray `CRUSOE_VPC_ID` → `ErrInconsistentConfig` |
 | `nic.go` | `mock_client.MockAPIClient` (pattern `internal/client/mock/client.go`) | providerID path, SystemUUID path, name fallback, network match, no-NIC-in-VPC hard error, zero-NIC error; startup location from `GetClusterByName` (match by name → `.Location`; lookup failure non-fatal); instance-location fallback when empty + mismatch warning when set |
 | `opTracker` | fake + fake workqueue | N pending ops → exactly ONE `ListPodCIDRAllocationOperations` call per tick (assert via fake call log); terminal op → result stashed + nodeKey enqueued; unknown op dropped after 3 misses + enqueued; empty pending → zero RPCs |
-| reconcile state machine | `k8sfake.NewSimpleClientset` + `dynamicfake` (`vendor/k8s.io/client-go/dynamic/fake/simple.go`) + `LoggingFakeClient` + gomock APIClient; drive `reconcile()` directly (no informers — inject listers built from `cache.NewIndexer`) | happy path C1→C11 incl. write ordering (clientset action list: op-id label patch before any poll; condition PATCH before the final patch; final patch simultaneously removes taint, clears op-id, sets epoch ready-at — value asserted to parse as integer seconds and to pass label-value validation); poll requeue while `PendingPolls>0`; `FailNext` → label cleared + event + error → idempotent recreate; conflict path (knob) → event once + counter + backoff + taint retained; crash recovery: (i) op-id label present + op SUCCEEDED, (ii) op-id present + op expired → List adopt, (iii) no label + allocation pre-seeded in fake → adopt without create; Node absent → allocation created, finalize deferred; CiliumNode deleted → assert **zero** SDN calls; multiple podCIDRs |
+| reconcile state machine | `k8sfake.NewSimpleClientset` + `dynamicfake` (`vendor/k8s.io/client-go/dynamic/fake/simple.go`) + `LoggingFakeClient` + gomock APIClient; drive `reconcile()` directly (no informers — inject listers built from `cache.NewIndexer`) | happy path C1→C11 incl. write ordering (clientset action list: op-id label patch before any poll; condition PATCH before the final patch; final patch simultaneously removes taint, clears op-id, sets epoch ready-at — value asserted to parse as integer seconds and to pass label-value validation); poll requeue while `PendingPolls>0`; `FailNext` → label cleared + event + error, then the retry **adopts the surviving row** via C7 List-before-create (taint removed, exactly one row — revision f: the server does not roll back a FAILED create); conflict path (knob) → event once + counter + backoff + taint retained; crash recovery: (i) op-id label present + op SUCCEEDED, (ii) op-id present + op expired → List adopt, (iii) no label + allocation pre-seeded in fake → adopt without create; Node absent → allocation created, finalize deferred; CiliumNode deleted → assert **zero** SDN calls; multiple podCIDRs |
 | reaper | same harness | orphan past grace deleted; per-pass 50-deletion cap asserted with 120 fixtures draining across passes; young allocation (within grace) spared; NIC-mismatch deleted + node enqueued; missing enqueued; unresolved NIC protects its cidr (fail closed); gauges set; List error aborts pass |
 | envtest-style (optional, follow-up) | real informers against fake clients, `Run()` end-to-end | event handler → queue → worker → tracker wiring, cache-sync gating |
 
-Fake knobs used deliberately: `PendingPolls` proves the controller re-enqueues instead of blocking; `FailNext` proves FAILED→recreate; `ConflictCIDRs` proves the /24-reuse race handling.
+Fake knobs used deliberately: `PendingPolls` proves the controller re-enqueues instead of blocking; `FailNext` proves FAILED→retry converges (the surviving row is adopted, not re-created); `ConflictCIDRs` proves the /24-reuse race handling.
 
 ## 16. Commit-by-Commit Implementation Plan
 
@@ -781,14 +801,14 @@ Each commit builds, passes `make lint` and `make test` independently.
 8. **Wiring: `register.go` + `main.go` registration** — §6.2/§6.3; overlay-mode no-op log line; fail-fast tests for missing/partial native config.
 9. **Docs** — README note for `CRUSOE_ROUTING_MODE` + implementation status. No release yaml: drop 1 is v2-only and the v2 CCM Deployment is rendered by **addon-controller** (MR 57), so env/RBAC manifests live there — §14's least-privilege rules are the input to that MR, not a file in this repo. (`releases/` is the v1/self-managed path, out of scope for drop 1.)
 
-## 17. What Changes When the Real gRPC Client Lands
+## 17. Real gRPC Client — DONE (revision f)
 
-The generated clients **already exist**: `gitlab.com/crusoeenergy/schemas` ships `api/island/v2/region/pod_cidr_allocation_management_v2.pb.go` (+ grpc stubs) and region mocks. When SDN endpoint config lands, the swap is:
+The generated clients ship in `gitlab.com/crusoeenergy/schemas/api/island/v2` (v2.216.28): `region.PodCIDRAllocationManagementClient`, `region.VPCPrefixReservationManagementClient`, and the `component` message types. **Landed** as:
 
-1. One new file `internal/routes/sdn/grpc.go`: `type grpcClient struct{...}` implementing `PodCIDRAllocationClient` over the schemas-generated client, **constructed the way kubernetes-manager builds its region clients** (`kubernetes-manager/internal/nodepool/v2/worker/clients.go:86-98`): a region address + `rpc.AuthInfo{cert_file,key_file,ca_file}` → `rpc.SetupMTLS` → `grpcutil.NewClientConnFactory(tlsConfig)` → `NewClientConn(regionAddress)` → `regiongrpc.NewPodCIDRAllocationManagementClient(conn)` (all from `gitlab.com/crusoeenergy/schemas/utils/rpc`; nil auth_info = plaintext for local dev). Config names for address/auth material follow that convention and are added by this MR next to their first use; instantiation stays native-mode-only by construction (register.go returns before any client is built in overlay mode). Its only non-mechanical work is error mapping: gRPC status codes → sentinels (`codes.Unavailable`/`codes.Aborted` → `ErrUnavailable`, `codes.InvalidArgument` → `ErrInvalidArgument`, `codes.NotFound` → `ErrNotFound`), and for `codes.FailedPrecondition` inspect `status.Convert(err).Details()` for `google.rpc.ErrorInfo` with reason `DESTINATION_ALLOCATED_TO_ANOTHER_INTERFACE` → `ErrDestinationConflict` (reason-based, NOT code-based — FAILED_PRECONDITION is also the unclassified bucket).
-2. `register.go` step 6 (§6.2): replace `sdn.NewLoggingFakeClient()` with the real constructor (behind the already-defined env vars), plus go.mod dependency on the schemas module.
+1. One new file `internal/routes/sdn/grpc.go`: `type GRPCClient struct{...}` implementing `PodCIDRAllocationClient` over the schemas-generated clients, **constructed the way kubernetes-manager builds its region clients**: `rpc.SetupMTLS(rpc.AuthInfo{cert,key,ca})` (empty trio ⇒ nil tlsConfig ⇒ plaintext) → `grpcutil.NewClientConnFactory(tlsConfig).NewClientConn(endpoint)` → `region.NewPodCIDRAllocationManagementClient(conn)` (all from `gitlab.com/crusoeenergy/schemas/utils/rpc`). `NewGRPCClient(endpoint, certFile, keyFile, caFile string)` takes **plain strings** so `register.go`/`config.go` stay schemas-free (the seam boundary); `Close()` tears down the conn. It is native-mode-only by construction (register.go returns before any client is built in overlay mode). The only non-mechanical work is error mapping (`mapError`): `codes.Unavailable`/`codes.Aborted` → `ErrUnavailable`, `codes.InvalidArgument` → `ErrInvalidArgument`, `codes.NotFound` → `ErrNotFound`, `codes.Unimplemented` → plain wrapped (Delete not served yet), and for `codes.FailedPrecondition` inspect `status.Convert(err).Details()` for a `google.rpc.ErrorInfo` with domain `region.island.v2` + reason `DESTINATION_ALLOCATED_TO_ANOTHER_INTERFACE` → `ErrDestinationConflict` (reason-based, NOT code-based — FAILED_PRECONDITION is also the unclassified bucket, e.g. location-not-ACTIVE carries no ErrorInfo and stays retryable). The seam `Operation.AllocationIDs` comes from the operation's `BulkOperationMetadata.resource_ids` (unpacked from the `Metadata` Any); the failure message from `Operation.GetError()`.
+2. `register.go` step 6 (§6.2): `sdn.NewLoggingFakeClient()` is replaced by `buildSDNClient(cfg)` — endpoint absent keeps the fake (loud `klog.Warning`), endpoint set dials the real client (logs mTLS vs plaintext) and closes the conn on `ctx.Done()`. go.mod gained the schemas + grpc deps (`GOPRIVATE` required).
 
-Nothing else changes: the state machine, tracker, reaper, tests, metrics, and RBAC are client-agnostic by construction. `fake.go` already models the merged contract's semantics, so it remains a truthful test double.
+Nothing else changes: the state machine, tracker, reaper, tests, metrics, and RBAC are client-agnostic by construction. `fake.go` models the merged contract's semantics — **corrected in revision f** to keep the row on a FAILED create (server does not roll back on OVN failure), so it remains a truthful test double.
 
 ## 18. Open Questions / Risks
 
@@ -815,6 +835,7 @@ Branch: `CRUSOE-97212-vpc-native-pod-routing` (commit-by-commit per §16).
 | 7 | `internal/routes`: reaper | done: c927cfe |
 | 8 | Wiring: register.go + main.go registration | done: ce790e3 |
 | 9 | Docs (README + status; no release yaml — see §16.9) | done (this commit — self-referential sha) |
+| 10 | Real gRPC SDN client (`sdn/grpc.go`, schemas v2.216.28), SDN endpoint/mTLS env, fake FAILED-create parity (revision f) | done: working tree |
 
 ### Deviations from the design doc
 

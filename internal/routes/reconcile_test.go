@@ -139,7 +139,7 @@ func drainToReady(t *testing.T, h *reconcileHarness) {
 		if _, err := h.controller.reconcile(ctx, rcNode); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
-		if err := h.syncNodeFromClient(ctx, rcNode); err != nil {
+		if err := h.syncNodeFromClient(ctx); err != nil {
 			t.Fatalf("sync node: %v", err)
 		}
 		h.controller.pollOpsOnce(ctx)
@@ -308,7 +308,7 @@ func TestReconcile_FailNextClearsLabelAndErrors(t *testing.T) {
 	if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
-	if err := h.syncNodeFromClient(context.Background(), rcNode); err != nil {
+	if err := h.syncNodeFromClient(context.Background()); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	h.controller.pollOpsOnce(context.Background())
@@ -323,6 +323,21 @@ func TestReconcile_FailNextClearsLabelAndErrors(t *testing.T) {
 	}
 	if !hasUnroutableTaint(got) {
 		t.Fatalf("taint must remain after FAILED op")
+	}
+	// The server does not roll back on FAILED create: the row survives. With the
+	// op-id label cleared, the retry finds it via C7 List-before-create and ADOPTS
+	// it instead of re-creating. Convergence: taint removed, exactly one row.
+	if err := h.syncNodeFromClient(context.Background()); err != nil {
+		t.Fatalf("sync before retry: %v", err)
+	}
+	if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
+		t.Fatalf("retry after FAILED (adopt surviving row): %v", err)
+	}
+	if hasUnroutableTaint(getNode(t, kube)) {
+		t.Fatalf("retry must adopt the surviving row and finalize the node")
+	}
+	if n := len(listAll(t, fakeSDN)); n != 1 {
+		t.Fatalf("retry must adopt, not re-create: got %d rows, want 1", n)
 	}
 }
 
@@ -491,7 +506,7 @@ func TestReconcile_RecoverOpIDLabelExpiredAdopts(t *testing.T) {
 		if _, err := h.controller.reconcile(context.Background(), rcNode); err != nil {
 			t.Fatalf("reconcile loop: %v", err)
 		}
-		if err := h.syncNodeFromClient(context.Background(), rcNode); err != nil {
+		if err := h.syncNodeFromClient(context.Background()); err != nil {
 			t.Fatalf("sync: %v", err)
 		}
 	}

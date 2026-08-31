@@ -27,9 +27,10 @@ const (
 type fakeOp struct {
 	op        Operation
 	remaining int  // polls left before flipping terminal; <=0 means terminal
-	fail      bool // resolve FAILED (and roll back the mutation) at terminal
-	// ids are the allocation ids the op touches: a create's inserted rows (rolled
-	// back on FAILED) or a delete's target rows (removed on SUCCEEDED).
+	fail      bool // resolve FAILED at terminal
+	// ids are the allocation ids the op touches: a create's inserted rows (kept
+	// even on FAILED, matching the server, which does not roll back on OVN
+	// failure) or a delete's target rows (removed on SUCCEEDED, kept on FAILED).
 	ids      []string
 	isDelete bool
 }
@@ -47,7 +48,8 @@ type LoggingFakeClient struct {
 	// Default 1. Test knob.
 	PendingPolls int
 	// FailNext, if true, makes the NEXT Create/Delete's operation resolve
-	// FAILED (and the mutation is rolled back); the flag auto-clears. Test knob.
+	// FAILED; the row is NOT rolled back (server parity — a failed create leaves
+	// its row for the retry to adopt). The flag auto-clears. Test knob.
 	FailNext bool
 	// ConflictCIDRs holds destinations for which CreatePodCIDRAllocations
 	// returns ErrDestinationConflict, simulating a stale allocation held by a
@@ -276,13 +278,9 @@ func (f *LoggingFakeClient) advance(fo *fakeOp) {
 	if fo.fail {
 		fo.op.State = OperationStateFailed
 		fo.op.Error = "simulated OVN/DB failure"
-		// Roll back a failed create; retain rows for a failed delete.
-		if !fo.isDelete {
-			for _, id := range fo.ids {
-				delete(f.allocs, id)
-			}
-		}
-
+		// The server does NOT roll back on OVN failure: a failed create leaves its
+		// row in place (retry converges on the same row via List-before-create), and
+		// a failed delete retains its rows. So a FAILED op mutates nothing here.
 		return
 	}
 

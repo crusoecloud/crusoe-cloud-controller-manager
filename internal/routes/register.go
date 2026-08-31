@@ -84,7 +84,19 @@ func startRouteController(ctx context.Context,
 	}
 	cfg.Location = loc
 
-	sdnClient := sdn.NewLoggingFakeClient() // the single line swapped when the real client lands
+	sdnClient, closeSDN, err := buildSDNClient(cfg)
+	if err != nil {
+		return nil, false, err
+	}
+	if closeSDN != nil {
+		// Tear the gRPC conn down when the controller context is cancelled.
+		go func() {
+			<-ctx.Done()
+			if cerr := closeSDN(); cerr != nil {
+				klog.ErrorS(cerr, "crusoe-route-controller: closing SDN connection")
+			}
+		}()
+	}
 
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dynClient, informerResync, metav1.NamespaceAll, nil)
@@ -117,6 +129,33 @@ func buildClients(
 	}
 
 	return kube, dyn, nil
+}
+
+// buildSDNClient chooses the SDN client for native mode. With no endpoint
+// rendered it keeps the in-memory logging fake (rollout compatibility with
+// addon-controller MR 57, which does not render the SDN vars yet) and returns a
+// nil close func. With an endpoint it dials the real gRPC client (mTLS when the
+// cert trio is set, plaintext otherwise) and returns its Close as the teardown.
+func buildSDNClient(cfg *Config) (sdn.PodCIDRAllocationClient, func() error, error) {
+	if cfg.SDNEndpoint == "" {
+		klog.Warning("crusoe-route-controller: native mode running with the LOGGING FAKE SDN client " +
+			"(no CRUSOE_SDN_ENDPOINT rendered; SDN state is in-memory only)")
+
+		return sdn.NewLoggingFakeClient(), nil, nil
+	}
+
+	mode := "plaintext"
+	if cfg.SDNCertFile != "" {
+		mode = "mTLS"
+	}
+	klog.InfoS("crusoe-route-controller: dialing SDN endpoint", "endpoint", cfg.SDNEndpoint, "mode", mode)
+
+	gc, err := sdn.NewGRPCClient(cfg.SDNEndpoint, cfg.SDNCertFile, cfg.SDNKeyFile, cfg.SDNCAFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("building SDN gRPC client: %w", err)
+	}
+
+	return gc, gc.Close, nil
 }
 
 // buildAPIClient constructs the Crusoe API client the same way internal/cloud.go

@@ -11,9 +11,17 @@ const (
 	envVPCID        = "CRUSOE_VPC_ID"
 	envReservation  = "CRUSOE_VPC_PREFIX_RESERVATION_IDS"
 	envProjectID    = "CRUSOE_PROJECT_ID"
+	envSDNEndpoint  = "CRUSOE_SDN_ENDPOINT"
+	envSDNCert      = "CRUSOE_SDN_CERT_FILE"
+	envSDNKey       = "CRUSOE_SDN_KEY_FILE"
+	envSDNCA        = "CRUSOE_SDN_CA_FILE"
 	testVPCID       = "net-abc"
 	testReservation = "rsv-pods"
 	testProjectID   = "proj-123"
+	testSDNEndpoint = "sdn.region.local:443"
+	testCertFile    = "/c.pem"
+	testKeyFile     = "/k.pem"
+	testCAFile      = "/ca.pem"
 )
 
 type configCase struct {
@@ -102,10 +110,87 @@ func configCases() []configCase {
 	}
 }
 
+// nativeEnvWith returns nativeEnv overlaid with the given SDN vars.
+func nativeEnvWith(extra map[string]string) map[string]string {
+	m := nativeEnv()
+	for k, v := range extra {
+		m[k] = v
+	}
+
+	return m
+}
+
+// sdnConfigCases covers the SDN wiring env rules (kept separate from
+// configCases to stay within funlen).
+func sdnConfigCases() []configCase {
+	fullTrio := map[string]string{
+		envSDNEndpoint: testSDNEndpoint,
+		envSDNCert:     testCertFile, envSDNKey: testKeyFile, envSDNCA: testCAFile,
+	}
+
+	return []configCase{
+		{
+			name:    "overlay with stray sdn endpoint",
+			env:     map[string]string{envRoutingMode: RoutingModeOverlay, envSDNEndpoint: testSDNEndpoint},
+			wantErr: ErrInconsistentSDNConfig,
+		},
+		{
+			name:    "overlay with stray sdn cert",
+			env:     map[string]string{envRoutingMode: RoutingModeOverlay, envSDNCert: testCertFile},
+			wantErr: ErrInconsistentSDNConfig,
+		},
+		{
+			name: "native endpoint absent keeps fake",
+			env:  nativeEnv(),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.SDNEndpoint != "" {
+					t.Fatalf("expected empty SDN endpoint, got %q", cfg.SDNEndpoint)
+				}
+			},
+		},
+		{
+			name: "native endpoint only is plaintext",
+			env:  nativeEnvWith(map[string]string{envSDNEndpoint: testSDNEndpoint}),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.SDNEndpoint != testSDNEndpoint || cfg.SDNCertFile != "" {
+					t.Fatalf("expected plaintext endpoint config, got %+v", cfg)
+				}
+			},
+		},
+		{
+			name: "native endpoint with full cert trio is mTLS",
+			env:  nativeEnvWith(fullTrio),
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.SDNCertFile != testCertFile || cfg.SDNKeyFile != testKeyFile || cfg.SDNCAFile != testCAFile {
+					t.Fatalf("expected full cert trio, got %+v", cfg)
+				}
+			},
+		},
+		{
+			name:    "native partial cert trio fails",
+			env:     nativeEnvWith(map[string]string{envSDNEndpoint: testSDNEndpoint, envSDNCert: testCertFile}),
+			wantErr: ErrInconsistentSDNConfig,
+		},
+		{
+			name: "native cert trio without endpoint fails",
+			env: nativeEnvWith(map[string]string{
+				envSDNCert: testCertFile, envSDNKey: testKeyFile, envSDNCA: testCAFile,
+			}),
+			wantErr: ErrInconsistentSDNConfig,
+		},
+	}
+}
+
 func runConfigCase(t *testing.T, tc *configCase) {
 	t.Helper()
 	// Clear all relevant vars, then set the case's.
-	for _, k := range []string{envRoutingMode, envVPCID, envReservation, envProjectID} {
+	for _, k := range []string{
+		envRoutingMode, envVPCID, envReservation, envProjectID,
+		envSDNEndpoint, envSDNCert, envSDNKey, envSDNCA,
+	} {
 		t.Setenv(k, "")
 	}
 	for k, v := range tc.env {
@@ -133,7 +218,8 @@ func runConfigCase(t *testing.T, tc *configCase) {
 //
 //nolint:paralleltest // env-var mutation cannot run in parallel
 func TestLoadConfigFromEnv(t *testing.T) {
-	for _, tc := range configCases() {
+	cases := append(configCases(), sdnConfigCases()...)
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			runConfigCase(t, &tc)
 		})

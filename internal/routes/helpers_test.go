@@ -77,8 +77,8 @@ func (h *reconcileHarness) addNode(node *v1.Node) error {
 // syncNodeFromClient refreshes the node lister's copy from the fake clientset,
 // emulating what the informer does after a patch. Tests call this between
 // reconcile steps.
-func (h *reconcileHarness) syncNodeFromClient(ctx context.Context, name string) error {
-	node, err := h.controller.kubeClient.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+func (h *reconcileHarness) syncNodeFromClient(ctx context.Context) error {
+	node, err := h.controller.kubeClient.CoreV1().Nodes().Get(ctx, rcNode, metav1.GetOptions{})
 	if err != nil {
 		return err //nolint:wrapcheck // test helper
 	}

@@ -26,6 +26,20 @@ indicates misrendered config). The SDN project id comes from `CRUSOE_PROJECT_ID`
 and the cluster location is resolved at startup from the cluster object;
 `--cluster-name` must equal the Crusoe cluster resource name.
 
+The SDN gRPC endpoint is configured (all optional in native mode) via:
+
+- `CRUSOE_SDN_ENDPOINT` — `host:port` of the region SDN gRPC server. **When
+  unset the controller runs with an in-memory logging fake** (SDN state is not
+  persisted) so the endpoint can be rolled out independently of this CCM.
+- `CRUSOE_SDN_CERT_FILE`, `CRUSOE_SDN_KEY_FILE`, `CRUSOE_SDN_CA_FILE` — client
+  mTLS material. All-or-none, and they require `CRUSOE_SDN_ENDPOINT`. Endpoint
+  set with the cert trio absent uses a plaintext connection (local dev); with
+  the full trio it uses mTLS.
+
+Building the CCM now pulls private `gitlab.com/crusoeenergy/*` modules, so set
+`GOPRIVATE=gitlab.com/crusoeenergy/*` (or the equivalent git/netrc auth) when
+building from source.
+
 See [`docs/designs/vpc-native-pod-routing-ccm.md`](docs/designs/vpc-native-pod-routing-ccm.md)
 for the full design, including the deployment env block and the least-privilege
 RBAC the route controller needs (§14). In v2 the CCM Deployment is rendered by
