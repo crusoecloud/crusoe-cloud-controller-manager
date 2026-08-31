@@ -72,8 +72,8 @@ func NewLoggingFakeClient() *LoggingFakeClient {
 var _ PodCIDRAllocationClient = (*LoggingFakeClient)(nil)
 
 // SeedAllocation inserts a fully-formed allocation directly into the fake's
-// table, bypassing the async create op. It exists for tests that need control
-// over fields such as CreatedAt (e.g. exercising the reaper grace period).
+// table, bypassing the async create op. It exists for tests that need a
+// pre-existing allocation (e.g. CloudRoutes ListRoutes/adopt paths).
 func (f *LoggingFakeClient) SeedAllocation(a *PodCIDRAllocation) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
