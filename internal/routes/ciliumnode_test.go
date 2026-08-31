@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -39,28 +38,8 @@ func TestCiliumNodeFromUnstructured_Fixture(t *testing.T) {
 	if cn.Name != "sriprod1-worker-0" {
 		t.Fatalf("name mismatch: %q", cn.Name)
 	}
-	if cn.DeletionTimestamp != nil {
-		t.Fatalf("expected nil deletionTimestamp, got %v", cn.DeletionTimestamp)
-	}
-	if cn.ResourceVersion != "482913" {
-		t.Fatalf("resourceVersion mismatch: %q", cn.ResourceVersion)
-	}
 	if len(cn.PodCIDRs) != 1 || cn.PodCIDRs[0] != "10.100.4.0/24" {
 		t.Fatalf("podCIDRs mismatch: %v", cn.PodCIDRs)
-	}
-}
-
-func TestCiliumNodeFromUnstructured_DeletionTimestamp(t *testing.T) {
-	t.Parallel()
-	u := loadFixture(t)
-	now := metav1.Now()
-	u.SetDeletionTimestamp(&now)
-	cn, err := ciliumNodeFromUnstructured(u)
-	if err != nil {
-		t.Fatalf("convert: %v", err)
-	}
-	if cn.DeletionTimestamp == nil {
-		t.Fatalf("expected deletionTimestamp to be carried through")
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 )
@@ -46,15 +45,7 @@ const (
 	RoutingModeNative = "native"
 )
 
-// Default timing/concurrency knobs.
-const (
-	defaultPollInterval   = 5 * time.Second
-	defaultReaperInterval = 5 * time.Minute
-	defaultReaperGrace    = 10 * time.Minute
-	defaultWorkers        = 4
-)
-
-// Config holds the resolved route-controller configuration.
+// Config holds the resolved route configuration.
 type Config struct {
 	RoutingMode             string
 	ProjectID               string   // from CRUSOE_PROJECT_ID; the instance client needs it too
@@ -70,11 +61,6 @@ type Config struct {
 	SDNCertFile string
 	SDNKeyFile  string
 	SDNCAFile   string
-
-	PollInterval   time.Duration // opTracker tick + AddAfter backstop
-	ReaperInterval time.Duration
-	ReaperGrace    time.Duration
-	Workers        int
 }
 
 var (
@@ -112,10 +98,6 @@ func LoadConfigFromEnv() (*Config, error) {
 		SDNCertFile:             os.Getenv(SDNCertFileEnv),
 		SDNKeyFile:              os.Getenv(SDNKeyFileEnv),
 		SDNCAFile:               os.Getenv(SDNCAFileEnv),
-		PollInterval:            defaultPollInterval,
-		ReaperInterval:          defaultReaperInterval,
-		ReaperGrace:             defaultReaperGrace,
-		Workers:                 defaultWorkers,
 	}
 
 	if mode == RoutingModeNative {

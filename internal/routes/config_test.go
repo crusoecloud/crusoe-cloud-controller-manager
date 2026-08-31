@@ -48,9 +48,6 @@ func checkNative(t *testing.T, cfg *Config) {
 	if cfg.Location != "" {
 		t.Fatalf("location must not come from env, got %q", cfg.Location)
 	}
-	if cfg.Workers != 4 {
-		t.Fatalf("expected default 4 workers, got %d", cfg.Workers)
-	}
 }
 
 func nativeEnv() map[string]string {

@@ -42,8 +42,9 @@ type PodCIDRAllocationClient interface {
 	// allocation. This controller always sends exactly 1 spec.
 	CreatePodCIDRAllocations(ctx context.Context, req CreatePodCIDRAllocationsRequest) (*Operation, error)
 	// DeletePodCIDRAllocations is async and intent-based (absent ids are skipped
-	// as success). REAPER USE ONLY — the reconcile path never deletes; VM delete
-	// owns per-node cleanup (KM MR 1314).
+	// as success). Sole caller is CloudRoutes.DeleteRoute, driven by the upstream
+	// route controller's delete loop; still Unimplemented server-side, so every
+	// call surfaces that error until the server lands it.
 	DeletePodCIDRAllocations(ctx context.Context, req DeletePodCIDRAllocationsRequest) (*Operation, error)
 	// ListPodCIDRAllocations returns allocations matching the query.
 	ListPodCIDRAllocations(ctx context.Context, q ListPodCIDRAllocationsQuery) ([]PodCIDRAllocation, error)

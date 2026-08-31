@@ -105,6 +105,21 @@ func (m *PodCIDRMirror) enqueueName(obj any) {
 	}
 }
 
+// metaName extracts a resource name from an informer object, tolerating
+// tombstones (cache.DeletedFinalStateUnknown).
+func metaName(obj any) (string, bool) {
+	if m, ok := obj.(metav1.Object); ok {
+		return m.GetName(), true
+	}
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		if m, ok := tombstone.Obj.(metav1.Object); ok {
+			return m.GetName(), true
+		}
+	}
+
+	return "", false
+}
+
 func (m *PodCIDRMirror) runWorker(ctx context.Context) {
 	for m.processNextItem(ctx) {
 	}

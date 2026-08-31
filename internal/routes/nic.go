@@ -21,42 +21,6 @@ var (
 	ErrNoNICInVPC = errors.New("no network interface in configured VPC")
 )
 
-// resolveNIC returns the network_interface_id for nodeName, caching it in
-// nodeState.nicID (immutable per instance). Resolution order:
-//  1. Node.Spec.ProviderID ("crusoe://<uuid>") -> GetInstanceByID
-//  2. Node.Status.NodeInfo.SystemUUID -> GetInstanceByID
-//  3. GetInstanceByName(nodeName)
-//
-// The NIC whose Network == cfg.VPCID is chosen; if none matches, resolution
-// fails (retryable) — the SDN contract requires the NIC to be in the
-// allocation's vpc+location, so any other pick can only fail downstream with a
-// less actionable error. Node may be nil (not yet registered), which skips
-// steps 1-2.
-//
-// Each successful resolve also sanity-checks the instance's project/location
-// against the startup-resolved config, warning on mismatch (§5.1).
-func (c *RouteController) resolveNIC(ctx context.Context, nodeName string, node *v1.Node) (string, error) {
-	if st := c.getState(nodeName); st != nil && st.nicID != "" {
-		return st.nicID, nil
-	}
-
-	inst, err := resolveInstance(ctx, c.apiClient, nodeName, node)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve NIC for node %s: %w", nodeName, err)
-	}
-
-	warnMetadataMismatch(inst, c.cfg)
-
-	nicID, err := selectNICID(inst, c.cfg.VPCID)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve NIC for node %s: %w", nodeName, err)
-	}
-
-	c.setNICID(nodeName, nicID)
-
-	return nicID, nil
-}
-
 // resolveInstance fetches the instance backing nodeName using providerID, then
 // SystemUUID, then name, mirroring internal/instances resolution.
 func resolveInstance(ctx context.Context, apiClient client.APIClient, nodeName string, node *v1.Node,
@@ -145,17 +109,4 @@ func warnMetadataMismatch(inst *crusoeapi.InstanceV1Alpha5, cfg *Config) {
 		klog.Warningf("instance location %s differs from cluster location %s (check --cluster-name rendering)",
 			inst.Location, cfg.Location)
 	}
-}
-
-// getState returns the soft state for a node, or nil if absent.
-func (c *RouteController) getState(nodeName string) *nodeState {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.state[nodeName]
-}
-
-// setNICID caches the resolved NIC id in the node's soft state.
-func (c *RouteController) setNICID(nodeName, nicID string) {
-	c.withState(nodeName, func(st *nodeState) { st.nicID = nicID })
 }

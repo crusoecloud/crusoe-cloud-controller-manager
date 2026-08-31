@@ -41,13 +41,14 @@ func main() {
 		Constructor: node.StartCloudNodeLifecycleControllerWrapper,
 	}
 
-	// Register the Crusoe VPC route controller (VPC-native pod routing, CRUSOE-97212).
-	// No-ops unless CRUSOE_ROUTING_MODE=native.
-	app.DefaultInitFuncConstructors["crusoe-route-controller"] = app.ControllerInitFuncConstructor{
+	// Register the Crusoe PodCIDR mirror (VPC-native pod routing, CRUSOE-97212):
+	// copies the CiliumNode v4 /24 to node.spec.podCIDR so the upstream route
+	// controller can act. No-ops unless CRUSOE_ROUTING_MODE=native.
+	app.DefaultInitFuncConstructors["crusoe-podcidr-mirror"] = app.ControllerInitFuncConstructor{
 		InitContext: app.ControllerInitContext{
-			ClientName: "crusoe-route-controller",
+			ClientName: "crusoe-podcidr-mirror",
 		},
-		Constructor: routes.StartRouteControllerWrapper,
+		Constructor: routes.StartPodCIDRMirrorWrapper,
 	}
 
 	command := app.NewCloudControllerManagerCommand(
@@ -77,6 +78,12 @@ func doInitializer(cfg *config.CompletedConfig) cloudprovider.Interface {
 	}
 	if cloud == nil {
 		klog.Fatalf("Cloud provider is nil")
+	}
+
+	// Stash --cluster-name for native-mode location resolution before Initialize
+	// runs (§8): Initialize does not receive the flag value.
+	if c, ok := cloud.(*cloudcontrollermanager.Cloud); ok {
+		c.SetClusterName(cfg.ComponentConfig.KubeCloudShared.ClusterName)
 	}
 
 	return cloud

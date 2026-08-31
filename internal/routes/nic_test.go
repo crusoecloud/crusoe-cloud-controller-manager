@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	crusoeapi "github.com/crusoecloud/client-go/swagger/v1alpha5"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client"
 	mock_client "github.com/crusoecloud/crusoe-cloud-controller-manager/internal/client/mock"
 	"github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
@@ -37,6 +38,12 @@ func instanceWith(nics []crusoeapi.NetworkInterface) *crusoeapi.InstanceV1Alpha5
 		ProjectId:         nicProjectID,
 		NetworkInterfaces: nics,
 	}
+}
+
+// newTestController builds a CloudRoutes wired only for NIC-resolution tests
+// (§9): no lister, no SDN — just cfg + the API client and the NIC cache.
+func newTestController(cfg *Config, apiClient client.APIClient) *CloudRoutes {
+	return NewCloudRoutes(cfg, nil, apiClient)
 }
 
 func TestResolveNIC_ProviderIDPath(t *testing.T) {
@@ -200,7 +207,7 @@ func TestResolveLocationFromCluster(t *testing.T) {
 	m.EXPECT().GetClusterByName(gomock.Any(), nicProjectID, nicClusterName).
 		Return(&crusoeapi.KubernetesCluster{Name: nicClusterName, Location: nicLocation}, nil)
 
-	loc, err := resolveLocationFromCluster(context.Background(), m, nicProjectID, nicClusterName)
+	loc, err := ResolveLocationFromCluster(context.Background(), m, nicProjectID, nicClusterName)
 	if err != nil {
 		t.Fatalf("resolveLocationFromCluster: %v", err)
 	}
@@ -217,7 +224,7 @@ func TestResolveLocationFromCluster_LookupFailurePropagates(t *testing.T) {
 		Return(nil, errors.New("api down"))
 
 	// The error propagates; startRouteController treats it as fatal (§5.1).
-	if _, err := resolveLocationFromCluster(context.Background(), m, nicProjectID, nicClusterName); err == nil {
+	if _, err := ResolveLocationFromCluster(context.Background(), m, nicProjectID, nicClusterName); err == nil {
 		t.Fatalf("expected error to propagate")
 	}
 }

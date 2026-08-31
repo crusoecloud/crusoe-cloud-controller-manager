@@ -4,9 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // ErrNotCiliumNode indicates the supplied object is not a CiliumNode
@@ -14,14 +12,10 @@ import (
 var ErrNotCiliumNode = errors.New("object is not a CiliumNode unstructured")
 
 // ciliumNode is the read-only projection of a cilium.io/v2 CiliumNode that the
-// controller needs. The controller never writes CiliumNode (KM MR 1314 owns
-// deletion), so only the fields relevant to conversion are extracted.
+// PodCIDR mirror needs (§7): just the name and the pod cidrs.
 type ciliumNode struct {
-	Name              string
-	UID               types.UID
-	ResourceVersion   string
-	DeletionTimestamp *metav1.Time
-	PodCIDRs          []string // spec.ipam.podCIDRs
+	Name     string
+	PodCIDRs []string // spec.ipam.podCIDRs
 }
 
 // ciliumNodeFromUnstructured extracts the projection above from an unstructured
@@ -35,20 +29,12 @@ func ciliumNodeFromUnstructured(u *unstructured.Unstructured) (*ciliumNode, erro
 		return nil, fmt.Errorf("%w: kind=%q", ErrNotCiliumNode, kind)
 	}
 
-	cn := &ciliumNode{
-		Name:              u.GetName(),
-		UID:               u.GetUID(),
-		ResourceVersion:   u.GetResourceVersion(),
-		DeletionTimestamp: u.GetDeletionTimestamp(),
-	}
-
 	cidrs, err := podCIDRsFromUnstructured(u)
 	if err != nil {
 		return nil, err
 	}
-	cn.PodCIDRs = cidrs
 
-	return cn, nil
+	return &ciliumNode{Name: u.GetName(), PodCIDRs: cidrs}, nil
 }
 
 // podCIDRsFromUnstructured reads spec.ipam.podCIDRs. Missing intermediate fields
