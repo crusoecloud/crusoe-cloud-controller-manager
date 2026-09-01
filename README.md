@@ -36,9 +36,13 @@ indicates misrendered config). The SDN project id comes from `CRUSOE_PROJECT_ID`
 and the cluster location is resolved at startup from the cluster object;
 `--cluster-name` must equal the Crusoe cluster resource name.
 
-Native mode additionally requires the flag `--cluster-cidr=<supernet covering
-all configured VPC prefix reservations>` — the CCM fails at startup without it
-(it scopes which stale routes the controller may delete).
+Native mode additionally requires the flag `--cluster-cidr=0.0.0.0/0` — the CCM
+fails at startup without it. The value is deliberately a constant: the flag only
+scopes which stale routes the upstream controller may delete, and ownership is
+already enforced by listing only the configured reservations' allocations. It
+never needs updating — in particular not when a pod range is added after
+cluster creation (a second cilium cluster-pool CIDR): that expansion is handled
+by appending the new reservation id to `CRUSOE_VPC_PREFIX_RESERVATION_IDS`.
 `--configure-cloud-routes` is left at its default (`true`);
 `--allocate-node-cidrs` must not be set (cilium cluster-pool IPAM owns pod CIDR
 allocation).

@@ -89,8 +89,10 @@ of the custom controller machinery, the flags contract for addon-controller
 - Orphan GC: an allocation whose NIC maps to no live node is returned from
   `ListRoutes` with `TargetNode: ""`; the upstream pass deletes it (route
   controller's routeMap skips empty TargetNode when indexing —
-  route_controller.go:286-288 — so `shouldDeleteRoute` fires). Scoped by
-  `isResponsibleForRoute` containment in `--cluster-cidr`.
+  route_controller.go:286-288 — so `shouldDeleteRoute` fires). Upstream's
+  `isResponsibleForRoute` containment check is vacuous by design
+  (`--cluster-cidr=0.0.0.0/0`, §10): ownership is enforced by `ListRoutes`
+  returning only our configured reservations' allocations.
 - Fail-closed: `ListRoutes` returns an error (aborting the whole pass,
   route_controller.go:249-253) if any live node's NIC cannot be resolved — a
   silently dropped node would make its allocation look orphaned.
@@ -480,7 +482,7 @@ Rendered on **native clusters only**, alongside the existing env (§5):
 
 | Flag | Value | Why |
 |---|---|---|
-| `--cluster-cidr` | covering supernet of **all** configured VPC prefix reservations | Required once `Routes()` is non-nil (empty is fatal — §3 trap). Max one v4 (two only as a dual-stack pair, core.go:121-129). It only scopes **deletions** (`isResponsibleForRoute`); `ListRoutes` already filters to our reservation ids, so a broad supernet is safe. On a pod-range expansion the supernet must still cover the new reservation — widen it in the same change that appends to `CRUSOE_VPC_PREFIX_RESERVATION_IDS`. |
+| `--cluster-cidr` | **`0.0.0.0/0`, constant** | Required once `Routes()` is non-nil (empty is fatal — §3 trap). Max one v4 (two only as a dual-stack pair, core.go:121-129). It only scopes **deletions** (`isResponsibleForRoute`); ownership is already guaranteed by `ListRoutes` filtering to `CRUSOE_VPC_PREFIX_RESERVATION_IDS`, so the widest scope is safe and correct. Deliberately NOT a reservation supernet: pod ranges get added out-of-band (a second cilium cluster-pool CIDR after a mis-sized create), and a value that must be widened in lockstep is a drift bug waiting to happen. This flag must never need updating. |
 | `--configure-cloud-routes` | leave default (`true`) | Overlay clusters are protected by `Routes() = (nil,false)`, which self-disables the controller with a log warning (core.go:109-113). |
 | `--route-reconciliation-period` | leave default (`10s`) | Pass cadence. |
 | `--allocate-node-cidrs` | do **not** set | Not consulted in the CCM route path; KCM CIDR allocation stays off (cilium cluster-pool owns allocation). |
@@ -516,13 +518,14 @@ endpoint is absent stays, §5).
 |---|---|
 | Node without `spec.podCIDR` (mirror lag) | Upstream skips it for creates; no route yet ⇒ nothing to delete. Mirror event re-drives within seconds. |
 | NIC resolution fails for any live node | `ListRoutes` fails ⇒ whole pass aborted (fail-closed). Risk: one unresolvable node stalls route reconciliation cluster-wide until it resolves or the Node object is removed (the CCM's own node-lifecycle controller removes nodes whose VM is gone). Accepted — see §18. |
-| Allocation whose NIC maps to no live node | `TargetNode: ""` ⇒ upstream deletes (orphan GC), scoped by `--cluster-cidr`. Inert until server-side Delete lands. |
+| Allocation whose NIC maps to no live node | `TargetNode: ""` ⇒ upstream deletes (orphan GC). Ownership scoping comes from `ListRoutes`' reservation-id filter (`--cluster-cidr` is `0.0.0.0/0`, §10). Inert until server-side Delete lands. |
 | `DESTINATION_ALLOCATED_TO_ANOTHER_INTERFACE` (/24-reuse race) | `CreateRoute` returns the conflict error ⇒ `FailedToCreateRoute` event + retry next pass; condition stays `True`, taint stays on. Self-resolves when the old VM's delete lands; orphan GC is the backstop post-server-Delete. |
 | Create op `FAILED` (OVN/DB) | Error from `CreateRoute`; row survives server-side; next pass adopts it via List-before-create. |
 | Crash/leader failover mid-create | Op abandoned; next pass List-before-create adopts the row or re-creates (contractually idempotent, never a second allocation). |
 | Poll deadline (5m) exceeded | Error; op continues server-side; next pass adopts. |
 | `DeleteRoute` while server Unimplemented | Error surfaced + logged by upstream each pass; no state change; safe noise. |
 | SDN unavailable | `ListRoutes` error aborts the pass; next tick retries. No backoff beyond the 10s period — acceptable, calls are cheap Lists. |
+| Manual pod-range expansion (second cilium cluster-pool CIDR after a mis-sized create) | Runbook: KM creates a VPC prefix reservation for the new range → append its id to `CRUSOE_VPC_PREFIX_RESERVATION_IDS` → add the CIDR to the cilium config. `--cluster-cidr` (`0.0.0.0/0`) is untouched. New nodes then get new-range /24s; the mirror copies them as usual and `reservationForCIDR` picks the containing reservation (`reservation.go`, tested by `TestCreateRoute_MultiReservationContainment`). If the env append lags the cilium change, creates for new-range nodes fail loudly (`ErrNoReservationForCIDR` or server-side containment rejection) with `FailedToCreateRoute` events and the node stays tainted — fail-safe, self-heals when the env lands. Existing nodes keep their /24 (one routed /24 per node — k8s caps `node.spec.podCIDRs` at one per family; §1 out-of-scope). |
 | Multiple CiliumNode podCIDRs | Mirror copies the first v4 only; one routed /24 per node (unchanged policy). |
 
 **Migration note (ordering, load-bearing):** enabling this build on a cluster
@@ -646,10 +649,11 @@ instead of the deleted register.go context hook.
   assumed to return the full reservation set. Revisit past a few thousand /24s.
 - **Mirror-before-server-Delete rollout gate** (§12 migration note) must be
   tracked in the addon-controller/kubernetes-manager sequencing.
-- **`--cluster-cidr` / reservation drift**: a reservation appended without
-  widening the supernet leaves new-range orphans outside
-  `isResponsibleForRoute` — never GC'd (safe direction: no wrongful deletes).
-  Contract note recorded in §10.
+- **`--cluster-cidr` / reservation drift**: eliminated by contract —
+  `--cluster-cidr` is the constant `0.0.0.0/0` (§10), so deletion scoping never
+  drifts when pod ranges are added out-of-band. The single source of truth for
+  ownership is `CRUSOE_VPC_PREFIX_RESERVATION_IDS` (env append is part of the
+  expansion runbook, §12).
 - **Condition-absent bootstrap window** (§11): unchanged residual; closed by
   the kubelet `--register-with-taints` cross-repo ask.
 
