@@ -20,6 +20,8 @@ const (
 var (
 	ErrInstanceNotFound = errors.New("instance not found")
 	ErrProjectIDNotSet  = errors.New("CRUSOE_PROJECT_ID environment variable is not set")
+	ErrClusterNotFound  = errors.New("kubernetes cluster not found")
+	ErrVPCNotFound      = errors.New("vpc network not found")
 )
 
 type APIClientImpl struct {
@@ -30,6 +32,8 @@ type APIClient interface {
 	GetInstanceByName(ctx context.Context, nodeName string) (*crusoeapi.InstanceV1Alpha5, error)
 	GetIBNetwork(ctx context.Context, projectID, ibPartitionID string) (*crusoeapi.IbPartition, error)
 	GetInstanceByID(ctx context.Context, instanceID string) (*crusoeapi.InstanceV1Alpha5, *http.Response, error)
+	GetClusterByID(ctx context.Context, projectID, clusterID string) (*crusoeapi.KubernetesCluster, error)
+	GetVPCNetworkByID(ctx context.Context, projectID, vpcID string) (*crusoeapi.VpcNetwork, error)
 }
 
 func (a *APIClientImpl) GetInstanceByName(ctx context.Context, nodeName string,
@@ -99,4 +103,35 @@ func (a *APIClientImpl) GetInstanceByID(ctx context.Context,
 	}
 
 	return &instances.Items[0], response, nil
+}
+
+// GetClusterByID fetches the Kubernetes cluster by its id. The CCM's
+// --cluster-name flag carries the cluster UUID, not the display name.
+func (a *APIClientImpl) GetClusterByID(ctx context.Context,
+	projectID, clusterID string,
+) (*crusoeapi.KubernetesCluster, error) {
+	cluster, response, err := a.CrusoeAPIClient.KubernetesClustersApi.GetCluster(ctx, projectID, clusterID)
+	if response != nil {
+		defer response.Body.Close()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes cluster %s: %w", clusterID, err)
+	}
+
+	return &cluster, nil
+}
+
+// GetVPCNetworkByID fetches the VPC network by id.
+func (a *APIClientImpl) GetVPCNetworkByID(ctx context.Context,
+	projectID, vpcID string,
+) (*crusoeapi.VpcNetwork, error) {
+	vpc, response, err := a.CrusoeAPIClient.VPCNetworksApi.GetVPCNetwork(ctx, projectID, vpcID)
+	if response != nil {
+		defer response.Body.Close()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vpc network %s: %w", vpcID, err)
+	}
+
+	return &vpc, nil
 }

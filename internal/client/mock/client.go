@@ -36,6 +36,36 @@ func (m *MockApiClient) EXPECT() *MockApiClientMockRecorder {
 	return m.recorder
 }
 
+// GetClusterByID mocks base method.
+func (m *MockApiClient) GetClusterByID(ctx context.Context, projectID, clusterID string) (*swagger.KubernetesCluster, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetClusterByID", ctx, projectID, clusterID)
+	ret0, _ := ret[0].(*swagger.KubernetesCluster)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetClusterByID indicates an expected call of GetClusterByID.
+func (mr *MockApiClientMockRecorder) GetClusterByID(ctx, projectID, clusterID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetClusterByID", reflect.TypeOf((*MockApiClient)(nil).GetClusterByID), ctx, projectID, clusterID)
+}
+
+// GetVPCNetworkByID mocks base method.
+func (m *MockApiClient) GetVPCNetworkByID(ctx context.Context, projectID, vpcID string) (*swagger.VpcNetwork, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetVPCNetworkByID", ctx, projectID, vpcID)
+	ret0, _ := ret[0].(*swagger.VpcNetwork)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetVPCNetworkByID indicates an expected call of GetVPCNetworkByID.
+func (mr *MockApiClientMockRecorder) GetVPCNetworkByID(ctx, projectID, vpcID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVPCNetworkByID", reflect.TypeOf((*MockApiClient)(nil).GetVPCNetworkByID), ctx, projectID, vpcID)
+}
+
 // GetIBNetwork mocks base method.
 func (m *MockApiClient) GetIBNetwork(ctx context.Context, projectID, ibPartitionID string) (*swagger.IbPartition, error) {
 	m.ctrl.T.Helper()

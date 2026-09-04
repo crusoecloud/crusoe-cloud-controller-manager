@@ -6,6 +6,7 @@ import (
 
 	cloudcontrollermanager "github.com/crusoecloud/crusoe-cloud-controller-manager/internal"
 	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/node"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/routes"
 	"k8s.io/apimachinery/pkg/util/wait"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/cloud-provider/app"
@@ -40,6 +41,16 @@ func main() {
 		Constructor: node.StartCloudNodeLifecycleControllerWrapper,
 	}
 
+	// Register the Crusoe PodCIDR mirror (VPC-native pod routing, CRUSOE-97212):
+	// copies the CiliumNode v4 /24 to node.spec.podCIDR so the upstream route
+	// controller can act. No-ops unless CRUSOE_ROUTING_MODE=native.
+	app.DefaultInitFuncConstructors["crusoe-podcidr-mirror"] = app.ControllerInitFuncConstructor{
+		InitContext: app.ControllerInitContext{
+			ClientName: "crusoe-podcidr-mirror",
+		},
+		Constructor: routes.StartPodCIDRMirrorWrapper,
+	}
+
 	command := app.NewCloudControllerManagerCommand(
 		opts,
 		doInitializer,
@@ -67,6 +78,17 @@ func doInitializer(cfg *config.CompletedConfig) cloudprovider.Interface {
 	}
 	if cloud == nil {
 		klog.Fatalf("Cloud provider is nil")
+	}
+
+	// Stash --cluster-name for native-mode location resolution before Initialize
+	// runs (section 8): Initialize does not receive the flag value.
+	if c, ok := cloud.(*cloudcontrollermanager.Cloud); ok {
+		c.SetClusterName(cfg.ComponentConfig.KubeCloudShared.ClusterName)
+		// Default --cluster-cidr from the VPC CIDR in native mode so the
+		// deployment does not have to render the flag; an explicit flag wins.
+		// startRouteController reads this same CompletedConfig later.
+		cidr := c.DefaultClusterCIDR(cfg.ComponentConfig.KubeCloudShared.ClusterCIDR)
+		cfg.ComponentConfig.KubeCloudShared.ClusterCIDR = cidr
 	}
 
 	return cloud
