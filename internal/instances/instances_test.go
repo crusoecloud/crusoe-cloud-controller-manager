@@ -26,6 +26,10 @@ const (
 	CrusoeProjectID  = "CRUSOE_PROJECT_ID"
 	TestProjectID    = "1841af90-a4f6-4412-8b23-b7035a6c72ae"
 	TestLocation     = "us-easttesting1-a"
+	TestUnitID       = "75e92d94-a380-4ceb-9232-4c356923b468"
+	TestWaypointID1  = "0d65e5ff-5349-5c07-8ef6-7121ef9a15f6"
+	TestWaypointID2  = "1f3c8ab2-6d21-4e70-9a55-2b8e4c1d7f90"
+	TestWaypointID3  = "9b4e7d10-3c85-42af-8e61-5a7f0c2b6d34"
 )
 
 func TestNodeAddresses(t *testing.T) {
@@ -309,4 +313,124 @@ func TestInstanceExists(t *testing.T) {
 	exists, err := instanceService.InstanceExists(context.Background(), node)
 	require.NoError(t, err)
 	require.True(t, exists)
+}
+
+//nolint:funlen // table driven test with several API response shapes
+func TestInstanceMetadataUnitAndWaypointLabels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		unitID         string
+		waypointIDs    []string
+		expectedLabels map[string]string
+		absentLabels   []string
+	}{
+		{
+			name:         "fields absent for backward compatibility",
+			absentLabels: []string{"crusoe.ai/unit.id", "crusoe.ai/waypoint.1.id"},
+		},
+		{
+			name:           "unit id only",
+			unitID:         TestUnitID,
+			expectedLabels: map[string]string{"crusoe.ai/unit.id": TestUnitID},
+			absentLabels:   []string{"crusoe.ai/waypoint.1.id"},
+		},
+		{
+			name:        "two waypoints split into two labels",
+			unitID:      TestUnitID,
+			waypointIDs: []string{TestWaypointID1, TestWaypointID2},
+			expectedLabels: map[string]string{
+				"crusoe.ai/unit.id":       TestUnitID,
+				"crusoe.ai/waypoint.1.id": TestWaypointID1,
+				"crusoe.ai/waypoint.2.id": TestWaypointID2,
+			},
+			absentLabels: []string{"crusoe.ai/waypoint.3.id"},
+		},
+		{
+			name:        "comma separated value in a single element is split",
+			waypointIDs: []string{TestWaypointID1 + "," + TestWaypointID2},
+			expectedLabels: map[string]string{
+				"crusoe.ai/waypoint.1.id": TestWaypointID1,
+				"crusoe.ai/waypoint.2.id": TestWaypointID2,
+			},
+			absentLabels: []string{"crusoe.ai/waypoint.3.id"},
+		},
+		{
+			name:         "empty values do not produce labels",
+			waypointIDs:  []string{"", "  "},
+			absentLabels: []string{"crusoe.ai/waypoint.1.id"},
+		},
+		{
+			name:         "whitespace only unit id does not produce a label",
+			unitID:       "   ",
+			absentLabels: []string{"crusoe.ai/unit.id"},
+		},
+		{
+			name:        "more than two waypoints are all labelled",
+			waypointIDs: []string{TestWaypointID1, TestWaypointID2, TestWaypointID3},
+			expectedLabels: map[string]string{
+				"crusoe.ai/waypoint.1.id": TestWaypointID1,
+				"crusoe.ai/waypoint.2.id": TestWaypointID2,
+				"crusoe.ai/waypoint.3.id": TestWaypointID3,
+			},
+			absentLabels: []string{"crusoe.ai/waypoint.4.id"},
+		},
+		{
+			name:        "duplicate waypoints keep contiguous numbering",
+			waypointIDs: []string{TestWaypointID1, TestWaypointID1},
+			expectedLabels: map[string]string{
+				"crusoe.ai/waypoint.1.id": TestWaypointID1,
+				"crusoe.ai/waypoint.2.id": TestWaypointID1,
+			},
+			absentLabels: []string{"crusoe.ai/waypoint.3.id"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockClient := mock_client.NewMockApiClient(ctrl)
+			instanceService := instances.NewCrusoeInstances(mockClient)
+
+			mockClient.EXPECT().GetInstanceByID(gomock.Any(), TESTInstanceID).Return(&v1alpha5.InstanceV1Alpha5{
+				Id: TESTInstanceID,
+				NetworkInterfaces: []v1alpha5.NetworkInterface{
+					{
+						Ips: []v1alpha5.IpAddresses{
+							{
+								PrivateIpv4: &v1alpha5.PrivateIpv4Address{Address: "10.0.0.1"},
+								PublicIpv4:  &v1alpha5.PublicIpv4Address{Address: "192.168.0.1"},
+							},
+						},
+					},
+				},
+				Name:        TESTNodeName,
+				Location:    TestLocation,
+				UnitId:      test.unitID,
+				WaypointIds: test.waypointIDs,
+			}, nil, nil)
+
+			node := &v1.Node{
+				Spec: v1.NodeSpec{
+					ProviderID: ProviderIDPrefix + TESTInstanceID,
+				},
+			}
+
+			metadata, err := instanceService.InstanceMetadata(context.Background(), node)
+			require.NoError(t, err)
+			require.NotNil(t, metadata)
+
+			for key, expectedValue := range test.expectedLabels {
+				require.Equal(t, expectedValue, metadata.AdditionalLabels[key], "label %s", key)
+				require.LessOrEqual(t, len(metadata.AdditionalLabels[key]), 63, "label %s exceeds value limit", key)
+			}
+			for _, key := range test.absentLabels {
+				require.NotContains(t, metadata.AdditionalLabels, key)
+			}
+		})
+	}
 }

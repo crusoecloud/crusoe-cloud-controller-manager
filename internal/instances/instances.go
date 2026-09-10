@@ -215,6 +215,7 @@ func (i *Instances) InstanceMetadata(ctx context.Context, node *v1.Node) (*cloud
 	additionalLabels["crusoe.ai/instance.template.id"] = currInstance.InstanceTemplateId
 	additionalLabels["crusoe.ai/instance.state"] = currInstance.State
 	additionalLabels["crusoe.ai/pod.id"] = currInstance.PodId
+	addUnitAndWaypointLabels(currInstance, additionalLabels)
 	metadata := cloudprovider.InstanceMetadata{
 		ProviderID:       ProviderPrefix + currInstance.Id,
 		InstanceType:     currInstance.Type_,
@@ -255,6 +256,36 @@ func getProviderID(ctx context.Context, node *v1.Node, i *Instances) (string, er
 	}
 
 	return providerID, nil
+}
+
+// addUnitAndWaypointLabels adds the rack unit and leaf switch (waypoint) IDs reported by the
+// VM API, if present. Both fields are optional: older API versions omit them entirely, and the
+// region can serve them empty when the underlying node labels have not been written yet.
+// A waypoint ID is one UUID (36 chars) so it always fits a label value, but the IDs must not be
+// joined into a single value since two would exceed the 63 char limit for label values.
+//
+// Note that these labels are only ever applied while the node still carries the uninitialized
+// cloud provider taint, and cloud-provider discards a key that is already present on the node.
+// A value that changes after provisioning, for example a re-cabled node reporting a different
+// waypoint, will therefore not be reflected. That is a property of AdditionalLabels shared by
+// every label set here, not specific to these two fields.
+func addUnitAndWaypointLabels(currInstance *crusoeapi.InstanceV1Alpha5, additionalLabels map[string]string) {
+	if unitID := strings.TrimSpace(currInstance.UnitId); unitID != "" {
+		additionalLabels["crusoe.ai/unit.id"] = unitID
+	}
+	waypointIdx := 1
+	for _, waypointIDs := range currInstance.WaypointIds {
+		// The API models this as one ID per element, but the node label the values originate from
+		// holds them comma separated and that split happens region side, so a raw pass-through
+		// would silently produce one over-long, and therefore rejected, label value. Splitting
+		// here keeps both shapes correct for the cost of one loop.
+		for _, waypointID := range strings.Split(waypointIDs, ",") {
+			if waypointID = strings.TrimSpace(waypointID); waypointID != "" {
+				additionalLabels[fmt.Sprintf("crusoe.ai/waypoint.%d.id", waypointIdx)] = waypointID
+				waypointIdx++
+			}
+		}
+	}
 }
 
 func getInstanceIDFromProviderID(providerID string) string {
