@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/antihax/optional v1.0.0
-	github.com/crusoecloud/client-go v0.1.128
+	github.com/crusoecloud/client-go v1.0.14
 	github.com/golang/mock v1.6.0
 	github.com/stretchr/testify v1.11.1
 	k8s.io/api v0.35.5
