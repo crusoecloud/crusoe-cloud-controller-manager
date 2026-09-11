@@ -13,6 +13,7 @@ import (
 	"time"
 
 	crusoeapi "github.com/crusoecloud/client-go/swagger/v1alpha5"
+	"github.com/crusoecloud/crusoe-cloud-controller-manager/internal/metrics"
 )
 
 const (
@@ -183,6 +184,8 @@ func encodeQuery(values map[string][]string) string {
 }
 
 // NewCrusoeClient initializes a new Crusoe API client with the given configuration.
+// Every request is signed by AuthenticatingTransport and recorded by the metrics
+// transport, so signing failures are counted too (as code "<error>").
 func NewCrusoeClient(host, key, secret, userAgent string) *crusoeapi.APIClient {
 	cfg := crusoeapi.NewConfiguration()
 	cfg.UserAgent = userAgent
@@ -191,7 +194,8 @@ func NewCrusoeClient(host, key, secret, userAgent string) *crusoeapi.APIClient {
 		cfg.HTTPClient = http.DefaultClient
 	}
 
-	cfg.HTTPClient.Transport = NewAuthenticatingTransport(cfg.HTTPClient.Transport, key, secret)
+	cfg.HTTPClient.Transport = metrics.NewTransport(
+		NewAuthenticatingTransport(cfg.HTTPClient.Transport, key, secret))
 
 	return crusoeapi.NewAPIClient(cfg)
 }
