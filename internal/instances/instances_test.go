@@ -66,6 +66,81 @@ func TestNodeAddresses(t *testing.T) {
 	require.Equal(t, "node1.us-easttesting1-a.compute.internal", addresses[2].Address)
 }
 
+// A stopped instance is served with its network interfaces detached, which used to panic.
+func TestInstanceMetadataNoNetworkInterfaces(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := mock_client.NewMockApiClient(ctrl)
+	instanceService := instances.NewCrusoeInstances(mockClient)
+	mockClient.EXPECT().GetInstanceByID(gomock.Any(), TESTInstanceID).Return(&v1alpha5.InstanceV1Alpha5{
+		Id:       TESTInstanceID,
+		Name:     TESTNodeName,
+		Location: TestLocation,
+		State:    "STATE_SHUTOFF",
+	}, nil, nil)
+
+	node := &v1.Node{Spec: v1.NodeSpec{ProviderID: ProviderIDPrefix + TESTInstanceID}}
+	metadata, err := instanceService.InstanceMetadata(context.Background(), node)
+	require.ErrorIs(t, err, instances.ErrNoNodeAddress)
+	require.Nil(t, metadata)
+}
+
+// An instance without a public IP still has a usable internal address.
+func TestNodeAddressesNoPublicIP(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	os.Setenv(CrusoeProjectID, TestProjectID)
+
+	mockClient := mock_client.NewMockApiClient(ctrl)
+	instanceService := instances.NewCrusoeInstances(mockClient)
+	mockClient.EXPECT().GetInstanceByName(gomock.Any(), TESTNodeName).Return(&v1alpha5.InstanceV1Alpha5{
+		NetworkInterfaces: []v1alpha5.NetworkInterface{
+			{Ips: []v1alpha5.IpAddresses{{PrivateIpv4: &v1alpha5.PrivateIpv4Address{Address: "10.0.0.1"}}}},
+		},
+		Name:     TESTNodeName,
+		Location: TestLocation,
+	}, nil)
+
+	addresses, err := instanceService.NodeAddresses(context.Background(), types.NodeName(TESTNodeName))
+	require.NoError(t, err)
+	require.Len(t, addresses, 2)
+	require.Equal(t, v1.NodeInternalIP, addresses[0].Type)
+	require.Equal(t, "10.0.0.1", addresses[0].Address)
+	require.Equal(t, v1.NodeHostName, addresses[1].Type)
+}
+
+// A stopped instance keeps its dynamic public IP object but loses the address itself.
+func TestNodeAddressesEmptyPublicIP(t *testing.T) {
+	t.Parallel()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	os.Setenv(CrusoeProjectID, TestProjectID)
+
+	mockClient := mock_client.NewMockApiClient(ctrl)
+	instanceService := instances.NewCrusoeInstances(mockClient)
+	mockClient.EXPECT().GetInstanceByName(gomock.Any(), TESTNodeName).Return(&v1alpha5.InstanceV1Alpha5{
+		NetworkInterfaces: []v1alpha5.NetworkInterface{
+			{Ips: []v1alpha5.IpAddresses{{
+				PrivateIpv4: &v1alpha5.PrivateIpv4Address{Address: "10.0.0.1"},
+				PublicIpv4:  &v1alpha5.PublicIpv4Address{Type_: "dynamic"},
+			}}},
+		},
+		Name:     TESTNodeName,
+		Location: TestLocation,
+	}, nil)
+
+	addresses, err := instanceService.NodeAddresses(context.Background(), types.NodeName(TESTNodeName))
+	require.NoError(t, err)
+	require.Len(t, addresses, 2)
+	require.Equal(t, v1.NodeInternalIP, addresses[0].Type)
+	require.Equal(t, v1.NodeHostName, addresses[1].Type)
+}
+
 func TestInstanceID(t *testing.T) {
 	t.Parallel()
 	ctrl := gomock.NewController(t)

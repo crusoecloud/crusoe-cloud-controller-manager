@@ -63,11 +63,11 @@ func (a *APIClientImpl) GetIBNetwork(ctx context.Context,
 	projectID, ibPartitionID string,
 ) (*crusoeapi.IbPartition, error) {
 	ibPartition, response, err := a.CrusoeAPIClient.IBPartitionsApi.GetIBPartition(ctx, projectID, ibPartitionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list instances: %w", err)
-	}
 	if response != nil {
 		defer response.Body.Close()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get IB partition %s: %w", ibPartitionID, err)
 	}
 	klog.Infof("getIBNetwork: %v", ibPartition)
 

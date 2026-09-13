@@ -21,7 +21,11 @@ const (
 	ProviderPrefix           = "crusoe://"
 )
 
-var ErrAssertTimeTypeFailed = errors.New("failed to assert type time.Time for firstSeen")
+var (
+	ErrAssertTimeTypeFailed = errors.New("failed to assert type time.Time for firstSeen")
+	ErrNoInstance           = errors.New("no instance returned by Crusoe Cloud")
+	ErrNoNodeAddress        = errors.New("instance has no network interface with a private IPv4 address")
+)
 
 type Instances struct {
 	nodeFirstSeen sync.Map
@@ -292,21 +296,43 @@ func getInstanceIDFromProviderID(providerID string) string {
 	return strings.TrimPrefix(providerID, ProviderPrefix)
 }
 
+// getNodeAddress builds the node address list from the first network interface of the instance.
+// A stopped instance is served with its network interfaces detached, so every index has to be
+// checked: the API can return an instance with no interfaces, with no IPs on the first interface,
+// or with no public IPv4 at all for instances that were never given one.
+// Missing IPs are reported as an error rather than returned as a partial list, because the node
+// status update overwrites node.Status.Addresses wholesale and dropping the internal IP of a
+// stopped node breaks everything that routes to it. On an error the node controller logs and
+// leaves the addresses it already has in place.
 func getNodeAddress(currInstance *crusoeapi.InstanceV1Alpha5) ([]v1.NodeAddress, error) {
-	var nodeAddress []v1.NodeAddress
-	nodeAddress = append(nodeAddress, v1.NodeAddress{
+	if currInstance == nil {
+		return nil, ErrNoInstance
+	}
+	if len(currInstance.NetworkInterfaces) == 0 || len(currInstance.NetworkInterfaces[0].Ips) == 0 {
+		return nil, fmt.Errorf("%w: instance %s is in state %s", ErrNoNodeAddress, currInstance.Id, currInstance.State)
+	}
+	ips := currInstance.NetworkInterfaces[0].Ips[0]
+	if ips.PrivateIpv4 == nil || ips.PrivateIpv4.Address == "" {
+		return nil, fmt.Errorf("%w: instance %s is in state %s", ErrNoNodeAddress, currInstance.Id, currInstance.State)
+	}
+	nodeAddress := []v1.NodeAddress{{
 		Type:    v1.NodeInternalIP,
-		Address: currInstance.NetworkInterfaces[0].Ips[0].PrivateIpv4.Address,
-	}, v1.NodeAddress{
-		Type:    v1.NodeExternalIP,
-		Address: currInstance.NetworkInterfaces[0].Ips[0].PublicIpv4.Address,
-	}, v1.NodeAddress{
+		Address: ips.PrivateIpv4.Address,
+	}}
+	// A dynamically allocated public IP is released while the instance is stopped, so the
+	// address object can be present with an empty address. Publishing that as an ExternalIP
+	// would put a blank address on the node, so only a real address is reported.
+	if ips.PublicIpv4 != nil && ips.PublicIpv4.Address != "" {
+		nodeAddress = append(nodeAddress, v1.NodeAddress{
+			Type:    v1.NodeExternalIP,
+			Address: ips.PublicIpv4.Address,
+		})
+	}
+
+	return append(nodeAddress, v1.NodeAddress{
 		Type:    v1.NodeHostName,
 		Address: fmt.Sprintf("%s.%s.compute.internal", currInstance.Name, currInstance.Location),
-	},
-	)
-
-	return nodeAddress, nil
+	}), nil
 }
 
 func (i *Instances) handleInstanceNotFoundErr(providerID string, orignalErr error) (instanceShutdown bool, err error) {
