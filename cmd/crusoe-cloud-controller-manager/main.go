@@ -28,7 +28,7 @@ func main() {
 		os.Exit(1)
 	}
 	opts.KubeCloudShared.CloudProvider.Name = ProviderName
-	opts.Authentication.SkipInClusterLookup = true
+	opts.Authentication.SkipInClusterLookup = false
 
 	cloudcontrollermanager.RegisterCloudProvider()
 
