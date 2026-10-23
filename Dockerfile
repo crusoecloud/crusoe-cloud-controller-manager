@@ -2,7 +2,7 @@
 # STEP 1: build crusoe-cloud-controller-manager binary #
 ##########################################
 
-FROM golang:1.26 AS builder
+FROM golang:1.26.10 AS builder
 
 ARG CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME
 ENV CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME=$CRUSOE_CLOUD_CONTROLLER_MANAGER_NAME
@@ -33,7 +33,7 @@ RUN make cross
 ################################################################
 
 # Dockerfile.goreleaser should be kept roughly in sync
-FROM alpine:3.20.3
+FROM alpine:3.23.7
 
 COPY --from=builder /build/dist/crusoe-cloud-controller-manager /usr/local/go/bin/crusoe-cloud-controller-manager
 
